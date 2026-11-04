@@ -1556,13 +1556,43 @@ mod web_debug {
                         });
                     }
                 });
+                // Axes that ever read > 1.1 are hats (centred ≈ 1.286).
+                let hats_id = ui.scope_id().with(("hats", p.index));
+                let mut hats: Vec<usize> = ui.data(|d| d.get_temp(hats_id)).unwrap_or_default();
                 ui.horizontal_wrapped(|ui| {
                     ui.label("axes:");
                     for (i, v) in p.axes.iter().enumerate() {
+                        if *v > 1.1 && !hats.contains(&i) {
+                            hats.push(i);
+                        }
                         let t = egui::RichText::new(format!("{i}:{v:+.3}")).monospace();
-                        ui.label(if v.abs() > 0.2 { t.color(LIVE) } else { t });
+                        ui.label(if v.abs() > 0.2 && *v <= 1.1 {
+                            t.color(LIVE)
+                        } else {
+                            t
+                        });
+                        if hats.contains(&i) {
+                            let arrows: String = (0..4u8)
+                                .filter(|d| crate::input::hat_pressed(*v, *d))
+                                .map(|d| ["↑", "→", "↓", "←"][d as usize])
+                                .collect();
+                            let label = if arrows.is_empty() {
+                                "hat: centred".to_string()
+                            } else {
+                                format!("hat: {arrows}")
+                            };
+                            ui.colored_label(
+                                if arrows.is_empty() {
+                                    Color32::GRAY
+                                } else {
+                                    LIVE
+                                },
+                                label,
+                            );
+                        }
                     }
                 });
+                ui.data_mut(|d| d.insert_temp(hats_id, hats));
                 ui.separator();
             }
         });
