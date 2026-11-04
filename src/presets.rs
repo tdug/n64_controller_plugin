@@ -546,6 +546,27 @@ mod tests {
     }
 
     #[test]
+    fn detects_switch_mode_n64() {
+        let browser_s = dev("N64 Controller (Vendor: 057e Product: 2019)");
+        let mac_s = DeviceState {
+            name: "NSO N64 Controller".into(),
+            vendor: Some(0x057e),
+            product: Some(0x2019),
+            ..Default::default()
+        };
+        let d_mode = DeviceState {
+            name: "8BitDo 64".into(),
+            vendor: Some(0x2dc8),
+            product: Some(0x3019),
+            ..Default::default()
+        };
+        assert!(is_switch_n64(&browser_s));
+        assert!(is_switch_n64(&mac_s));
+        assert!(!is_switch_n64(&d_mode));
+        assert!(!is_switch_n64(&dev("Xbox Wireless Controller")));
+    }
+
+    #[test]
     fn modes_pick_their_own_preset() {
         let all = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
         let mac: Vec<_> = all
@@ -579,9 +600,16 @@ mod tests {
             name: "N64 Controller (Vendor: 057e Product: 2019)".into(),
             ..Default::default()
         };
-        assert_eq!(
-            name(&web, &browser_s).as_deref(),
-            Some("8BitDo 64 — S mode (browser, partial)")
-        );
+        // S mode is unsupported in the browser: no preset should claim it.
+        assert_eq!(name(&web, &browser_s), None);
     }
+}
+
+/// True for a Switch-protocol N64 pad (8BitDo 64 in S mode, or Nintendo's Switch Online N64
+/// controller). Browsers leave these in Nintendo's basic HID mode, which they can't map.
+pub fn is_switch_n64(dev: &DeviceState) -> bool {
+    let n = dev.name.to_lowercase();
+    dev.vid_pid().as_deref() == Some("057e:2019")
+        || (n.contains("057e") && n.contains("2019"))
+        || n.contains("nso n64")
 }

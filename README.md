@@ -69,6 +69,7 @@ The same UI compiles to WebAssembly and uses the browser Gamepad API.
 
 - **Works**: bindings, calibration, curves, macros, and the self-test.
 - **Disabled**: rumble (gilrs has no web force feedback), pak files, and the emulator plugin.
+- **8BitDo 64**: use **D mode** in the browser. In S mode it imitates a Switch controller, and Chrome leaves it in Nintendo's basic HID report mode, which the Gamepad API doesn't map usefully. Supporting S mode in the browser would need a separate WebHID Switch-protocol driver. S mode works on desktop.
 - **Debug tab** (browser only) shows three views:
   - the unfiltered Gamepad API: every button and axis index, plus the mapping type;
   - the plugin's view of each pad;

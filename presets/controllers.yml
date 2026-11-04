@@ -98,17 +98,6 @@ presets:
       left:  [{type: axis, axis: LeftStickX, positive: false}]
       right: [{type: axis, axis: LeftStickX, positive: true}]
 
-  - name: "8BitDo 64 — S mode (browser, partial)"
-    note: >-
-      S mode identifies as Nintendo's Switch Online N64 controller (057e:2019). Browsers report
-      it with no standard mapping; the D-pad is a hat on browser axis 9, which the plugin sees as
-      raw code 56 (gilrs numbers browser axes >= 4 as index + button count + 31). Only the D-pad
-      is filled in: use Guided setup for the rest.
-    ids: ["057e:2019"]
-    names: [["n64 controller"]]
-    platforms: [web]
-    buttons:
-      DUp:    [{type: raw_hat, code: 56, dir: 0}]
-      DRight: [{type: raw_hat, code: 56, dir: 1}]
-      DDown:  [{type: raw_hat, code: 56, dir: 2}]
-      DLeft:  [{type: raw_hat, code: 56, dir: 3}]
+# Not supported yet: 8BitDo 64 S mode in the browser. Chrome on macOS leaves it in Nintendo's
+# basic HID mode (report 0x3F); full support needs a WebHID Switch-protocol driver.
+# Use D mode in the browser.

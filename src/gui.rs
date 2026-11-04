@@ -374,6 +374,24 @@ impl App {
                 ui.colored_label(WARN, "not connected");
             }
         });
+        if cfg!(target_arch = "wasm32") && dev.is_some_and(crate::presets::is_switch_n64) {
+            egui::Frame::new()
+                .fill(Color32::from_rgb(70, 45, 10))
+                .inner_margin(8.0)
+                .corner_radius(4.0)
+                .show(ui, |ui| {
+                    ui.colored_label(
+                        WARN,
+                        egui::RichText::new("⚠ Controller in Switch mode: not supported in the browser").strong(),
+                    );
+                    ui.label(
+                        "This looks like an 8BitDo 64 with its switch on S (or Nintendo's Switch Online N64 \
+                         controller). Browsers can't read Switch-mode controllers properly. Move the switch \
+                         on the back to D and reconnect, then press a button. S mode does work in the \
+                         desktop plugin.",
+                    );
+                });
+        }
         if snap.devices.is_empty() && cfg!(target_arch = "wasm32") {
             ui.weak("Browser: press a button on your gamepad so the page can see it.");
         }
