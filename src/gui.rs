@@ -1107,7 +1107,7 @@ impl App {
             ui.label("Saturation").on_hover_text("Fraction of the stick's reach that maps to 100%. Raise if your stick hits 100% too early.");
             ui.add(egui::Slider::new(&mut s.saturation, 0.5..=1.0).custom_formatter(pct));
             ui.end_row();
-            ui.label("Range").on_hover_text("N64 value at full tilt (cardinal). Real controllers ≈ 80–85.");
+            ui.label("Range").on_hover_text("N64 value at full tilt (straight up/down/left/right). The console accepts −128..127, but a new official controller reaches about ±80–85 and games are tuned for that; much higher makes control twitchy.");
             ui.add(egui::Slider::new(&mut s.range, 40.0..=127.0).integer());
             ui.end_row();
             ui.label("Gate");

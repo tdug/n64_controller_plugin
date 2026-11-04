@@ -74,7 +74,7 @@ presets:
     family: "8BitDo 64"
     mode: D
     note: >-
-      Captured in Chrome on macOS with guided setup (reports as "8BitDo 64 BT", 2dc8:3019, no
+      Verified in Chrome on macOS with guided setup (reports as "8BitDo 64 BT", 2dc8:3019, no
       standard mapping: 18 buttons, 10 axes). Both back triggers are Z (browser buttons 8 and 9),
       Start is button 11. C-Left/Right are browser axis 2, C-Up/Down are axis 5 (raw code 54,
       up = negative). The D-pad is a hat on axis 9 (raw code 58) that rests at 3.286.
