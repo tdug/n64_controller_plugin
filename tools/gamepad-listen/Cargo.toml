@@ -1,0 +1,13 @@
+[package]
+name = "gamepad-listen"
+version = "0.1.0"
+edition = "2024"
+description = "Logs every gamepad event (mapped + raw codes) via gilrs, for building controller presets"
+license = "MIT"
+publish = false
+
+# Standalone: not part of the plugin's build.
+[workspace]
+
+[dependencies]
+gilrs = "0.11"
