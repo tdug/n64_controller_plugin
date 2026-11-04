@@ -8,9 +8,11 @@ An N64 controller plugin written in Rust. One library works with **Project64** (
 
 - **4 controllers**, each bound to keyboard keys and/or any gamepad. Gamepads are read through [gilrs](https://gitlab.com/gilrs-project/gilrs): Windows.Gaming.Input on Windows, evdev on Linux, IOKit on macOS.
 - **Bindings**: each N64 button and stick direction accepts several inputs. Analog axes, triggers and buttons can all be bound to anything.
-- **Quick setup**
+- **Quick setup** (presets live in [`presets/controllers.yml`](presets/controllers.yml))
   - Controller presets: the 8BitDo 64 in D mode ("8BitDo 64 BT") and S mode ("N64 Controller", which also fits Nintendo's Switch Online N64 pad). When one of these is the selected gamepad, the UI offers a one-click button to apply its preset.
   - **Guided setup**: press each N64 button when prompted. It works with any adapter that has no built-in mapping (Adaptoid, Raphnet, unmapped modes), and it keeps your keyboard keys.
+  - **Export bindings as YAML preset**: turns your current bindings into a preset entry for the file.
+  - The file is compiled into the plugin and the web page. On desktop, *Settings → Open presets file* copies it to your data folder, where your edits take effect without a rebuild.
 - **Analog stick**
   - Live view of the host stick input and the resulting N64 output.
   - **Range calibration**: record the resting center, then spin the stick around its gate. The recorded outline becomes the stick's 100 % reach in every direction, so a stick that is short in some directions still reaches full range.

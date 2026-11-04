@@ -73,6 +73,19 @@ mod native {
         let _ = std::process::Command::new(cmd).arg(path).spawn();
     }
 
+    pub fn open_file(path: &std::path::Path) {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd");
+            c.args(["/C", "start", ""]);
+            c
+        } else if cfg!(target_os = "macos") {
+            std::process::Command::new("open")
+        } else {
+            std::process::Command::new("xdg-open")
+        };
+        let _ = cmd.arg(path).spawn();
+    }
+
     /// Path of the plugin library (or executable) containing this code.
     #[cfg(windows)]
     pub fn module_path() -> Option<PathBuf> {

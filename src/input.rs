@@ -259,6 +259,15 @@ pub struct DeviceState {
     pub raw_buttons: Vec<(u32, f32)>,
     pub raw_axes: Vec<(u32, f32)>,
     pub ff: bool,
+    pub vendor: Option<u16>,
+    pub product: Option<u16>,
+}
+
+impl DeviceState {
+    /// "vvvv:pppp" in lower-case hex, when known.
+    pub fn vid_pid(&self) -> Option<String> {
+        Some(format!("{:04x}:{:04x}", self.vendor?, self.product?))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -615,6 +624,8 @@ impl InputManager {
                 uuid: pad.uuid().iter().map(|b| format!("{b:02x}")).collect(),
                 name: pad.name().to_string(),
                 ff: pad.is_ff_supported(),
+                vendor: pad.vendor_id(),
+                product: pad.product_id(),
                 ..Default::default()
             };
             for (i, b) in PadButton::ALL.iter().enumerate() {

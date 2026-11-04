@@ -77,12 +77,15 @@ pub struct App {
     json: String,
     tests: Vec<(String, bool)>,
     drag_point: Option<usize>,
+    controller_presets: Vec<crate::presets::ControllerPreset>,
+    presets_error: Option<String>,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let cfg = Config::load();
+        let (controller_presets, presets_error) = crate::presets::load_controller_presets();
         App {
             saved: cfg.clone(),
             preview: Runtime::new(cfg.clone(), true),
@@ -101,6 +104,8 @@ impl App {
             json: String::new(),
             tests: vec![],
             drag_point: None,
+            controller_presets,
+            presets_error,
         }
     }
 
@@ -406,39 +411,68 @@ impl App {
                 });
                 return;
             }
-            let suggested = dev.and_then(|d| crate::presets::suggested_preset(&d.name));
+            let presets = &self.controller_presets;
+            let suggested = dev.and_then(|d| crate::presets::suggested_preset(presets, d));
             ui.horizontal_wrapped(|ui| {
                 if let Some(p) = suggested {
                     if ui
-                        .button(egui::RichText::new(format!("✨ Apply {} preset", p.name)).strong())
-                        .on_hover_text(p.note)
+                        .button(egui::RichText::new(format!("✨ Apply “{}”", p.name)).strong())
+                        .on_hover_text(&p.note)
                         .clicked()
                     {
-                        (p.apply)(c);
+                        p.apply(c);
                     }
                 }
                 ui.menu_button("Controller presets", |ui| {
-                    for p in crate::presets::controller_presets() {
-                        if ui.button(p.name).on_hover_text(p.note).clicked() {
-                            (p.apply)(c);
+                    if presets.is_empty() {
+                        ui.weak("No presets for this platform.");
+                    }
+                    for p in presets {
+                        if ui.button(&p.name).on_hover_text(&p.note).clicked() {
+                            p.apply(c);
                             ui.close();
                         }
                     }
                 });
                 if ui
                     .button("🧭 Guided setup")
-                    .on_hover_text("Press each N64 button on your controller when asked. Works with any adapter (Adaptoid, 8BitDo in D-input mode, Raphnet, …). Keyboard keys are kept.")
+                    .on_hover_text("Press each N64 button on your controller when asked. Works with any adapter (Adaptoid, 8BitDo, Raphnet, …). Keyboard keys are kept.")
                     .clicked()
                 {
                     start_wizard = true;
                 }
+                if ui
+                    .button("📤 Export bindings as YAML preset")
+                    .on_hover_text("Copies this controller's gamepad bindings as a preset entry. Paste it under `presets:` in controllers.yml.")
+                    .clicked()
+                {
+                    let name = dev.map_or("My controller".to_string(), |d| d.name.clone());
+                    let yaml = crate::presets::ControllerPreset::from_bindings(&name, c, dev).to_yaml();
+                    ui.ctx().copy_text(yaml.clone());
+                    self.json = yaml;
+                    self.status = "Preset YAML copied to clipboard".into();
+                }
             });
+            if let Some(e) = &self.presets_error {
+                ui.colored_label(Color32::RED, format!("Preset file error: {e}"));
+            }
             if suggested.is_none() {
                 if let Some(d) = dev {
                     if d.name.to_lowercase().contains("adaptoid") {
-                        ui.weak("Adaptoid detected: no built-in mapping. Use Guided setup.");
+                        ui.weak(
+                            "Adaptoid detected: no preset yet. Use Guided setup, then export it.",
+                        );
                     }
                 }
+            }
+            if self.json.starts_with("- name:") {
+                ui.label("Exported preset (also on your clipboard):");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.json)
+                        .code_editor()
+                        .desired_rows(6)
+                        .desired_width(f32::INFINITY),
+                );
             }
         });
 
@@ -938,6 +972,26 @@ impl App {
                     }
                 });
                 ui.weak("Tip: create a `tdug-n64` folder next to the plugin for portable mode.");
+                ui.horizontal(|ui| {
+                    let path = crate::presets::user_presets_path();
+                    if ui
+                        .button("📝 Open presets file")
+                        .on_hover_text("Creates controllers.yml in the data folder from the built-in presets (if missing) and opens it.")
+                        .clicked()
+                    {
+                        if !path.exists() {
+                            let _ = std::fs::create_dir_all(&dir);
+                            let _ = std::fs::write(&path, crate::presets::BUILTIN_CONTROLLERS_YAML);
+                        }
+                        crate::platform::open_file(&path);
+                    }
+                    if ui.button("↻ Reload presets").clicked() {
+                        let (p, e) = crate::presets::load_controller_presets();
+                        self.controller_presets = p;
+                        self.presets_error = e;
+                    }
+                    ui.weak(format!("{} presets loaded", self.controller_presets.len()));
+                });
             }
             if ui.button("Reset everything to defaults").clicked() {
                 self.cfg = Config::default();

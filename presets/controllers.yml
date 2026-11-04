@@ -1,0 +1,75 @@
+# Controller mapping presets.
+#
+# This file is compiled into the plugin, the config tool and the web page.
+# Desktop: copy it to your data folder (Settings → "Open presets file" does this) and edit
+# that copy. It's loaded instead of the built-in one, no rebuild needed.
+#
+# Easiest way to make a preset: pick your gamepad, run "Guided setup", then click
+# "Export bindings as YAML preset" and paste the result below.
+#
+# Fields
+#   name:       shown in the UI
+#   note:       tooltip text (optional)
+#   names:      device-name match, case-insensitive. A list of lists: the preset matches if
+#               ALL substrings of ANY inner list appear in the device name.
+#   ids:        "vvvv:pppp" USB/Bluetooth vendor:product ids (hex), alternative to names
+#   platforms:  optional filter: any of web, windows, macos, linux. Raw codes differ per
+#               platform, so presets using raw_* inputs should set this.
+#   deadzone:   optional stick deadzone (0..1)
+#   buttons:    N64 button → list of inputs (A B Z Start L R DUp DDown DLeft DRight CUp CDown CLeft CRight)
+#   stick:      up/down/left/right → list of inputs
+#
+# Input forms
+#   {type: button, button: South}            standard-layout button: South East North West
+#                                            LeftShoulder LeftTrigger RightShoulder RightTrigger
+#                                            Select Start Mode LeftThumb RightThumb
+#                                            DPadUp DPadDown DPadLeft DPadRight C Z
+#   {type: axis, axis: RightStickY, positive: true}
+#                                            LeftStickX LeftStickY RightStickX RightStickY LeftZ RightZ DPadX DPadY
+#   {type: raw_button, code: 3}              unmapped device button (see the web Debug tab)
+#   {type: raw_axis, code: 2, positive: false}
+#   {type: raw_hat, code: 9, dir: 0}         single-axis hat (browser): dir 0 up, 1 right, 2 down, 3 left
+#
+# Applying a preset replaces gamepad bindings only; keyboard keys are kept.
+
+presets:
+  - name: "8BitDo 64 (standard layout)"
+    note: >-
+      For systems that recognise the controller as a standard gamepad (labels light up when
+      pressed). UNVERIFIED: if buttons are wrong, run Guided setup and export a preset.
+    names: [["8bitdo", "64"], ["8bitdo", "n64"]]
+    deadzone: 0.05
+    buttons:
+      A:      [{type: button, button: South}]
+      B:      [{type: button, button: West}, {type: button, button: East}]
+      Z:      [{type: button, button: LeftTrigger}]
+      Start:  [{type: button, button: Start}]
+      L:      [{type: button, button: LeftShoulder}]
+      R:      [{type: button, button: RightShoulder}, {type: button, button: RightTrigger}]
+      DUp:    [{type: button, button: DPadUp}]
+      DDown:  [{type: button, button: DPadDown}]
+      DLeft:  [{type: button, button: DPadLeft}]
+      DRight: [{type: button, button: DPadRight}]
+      CUp:    [{type: axis, axis: RightStickY, positive: true}]
+      CDown:  [{type: axis, axis: RightStickY, positive: false}]
+      CLeft:  [{type: axis, axis: RightStickX, positive: false}]
+      CRight: [{type: axis, axis: RightStickX, positive: true}]
+    stick:
+      up:    [{type: axis, axis: LeftStickY, positive: true}]
+      down:  [{type: axis, axis: LeftStickY, positive: false}]
+      left:  [{type: axis, axis: LeftStickX, positive: false}]
+      right: [{type: axis, axis: LeftStickX, positive: true}]
+
+  - name: "8BitDo 64 S mode / Switch Online N64 (browser)"
+    note: >-
+      S mode identifies as Nintendo's Switch Online N64 controller (057e:2019). Browsers report
+      it with no standard mapping; the D-pad is a hat on axis 9. Only the D-pad is filled in:
+      run Guided setup and export to complete it.
+    ids: ["057e:2019"]
+    names: [["n64 controller"]]
+    platforms: [web]
+    buttons:
+      DUp:    [{type: raw_hat, code: 9, dir: 0}]
+      DRight: [{type: raw_hat, code: 9, dir: 1}]
+      DDown:  [{type: raw_hat, code: 9, dir: 2}]
+      DLeft:  [{type: raw_hat, code: 9, dir: 3}]

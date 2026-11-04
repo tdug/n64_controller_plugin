@@ -1,8 +1,10 @@
 //! Built-in macro presets and controller mapping presets.
 
-use crate::config::{ControllerConfig, Macro, MacroMode, MacroStep, Playback};
-use crate::input::{Input, PadAxis, PadButton};
+use crate::config::{ControllerConfig, Macro, MacroMode, MacroStep, Playback, StickBindings};
+use crate::input::{DeviceState, Input};
 use crate::n64::N64Button;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 fn step(buttons: &[N64Button], stick: Option<[i8; 2]>, frames: u32) -> MacroStep {
     MacroStep {
@@ -64,94 +66,237 @@ pub fn builtin_macros() -> Vec<Macro> {
     ]
 }
 
-/// A host-controller mapping preset.
+/// Built-in controller presets (`presets/controllers.yml`).
+pub const BUILTIN_CONTROLLERS_YAML: &str = include_str!("../presets/controllers.yml");
+
+/// A host-controller mapping preset, loaded from YAML.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ControllerPreset {
-    pub name: &'static str,
-    /// Lower-case substrings; all must appear in the device name to suggest this preset.
-    pub matches: &'static [&'static [&'static str]],
-    pub apply: fn(&mut ControllerConfig),
-    pub note: &'static str,
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    /// Any inner list whose substrings all appear in the device name (case-insensitive).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<Vec<String>>,
+    /// "vvvv:pppp" hex vendor:product ids.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<String>,
+    /// web / windows / macos / linux; empty = all.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub platforms: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadzone: Option<f32>,
+    pub buttons: BTreeMap<N64Button, Vec<Input>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stick: Option<StickBindings>,
 }
 
-pub fn controller_presets() -> &'static [ControllerPreset] {
-    &[
-        ControllerPreset {
-            name: "8BitDo 64 — D mode (“8BitDo 64 BT”)",
-            matches: &[&["8bitdo", "64"], &["8bitdo", "n64"]],
-            apply: apply_8bitdo_64_xinput,
-            note: "Standard layout: C buttons on the right stick, Z on LT, L/R on LB/RB. \
-                   Press each button and check its label lights up; if one doesn't (the OS \
-                   or browser may not have a mapping for this mode), use Guided setup.",
-        },
-        ControllerPreset {
-            name: "8BitDo 64 — S mode (“N64 Controller”, Switch Online layout)",
-            // In S mode the 8BitDo identifies as Nintendo's Switch Online N64 controller.
-            matches: &[&["n64 controller"], &["057e", "2019"]],
-            apply: apply_8bitdo_64_xinput,
-            note: "Same standard layout. Also fits Nintendo's own Switch Online N64 controller. \
-                   In browsers this mode often reports a non-standard mapping: if labels don't \
-                   light up, use Guided setup.",
-        },
-    ]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PresetFile {
+    pub presets: Vec<ControllerPreset>,
 }
 
-/// Device-name check for presets.
-pub fn suggested_preset(device_name: &str) -> Option<&'static ControllerPreset> {
-    let n = device_name.to_lowercase();
-    controller_presets().iter().find(|p| {
-        p.matches
+pub fn current_platform() -> &'static str {
+    if cfg!(target_arch = "wasm32") {
+        "web"
+    } else if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    }
+}
+
+pub fn parse_controller_presets(yaml: &str) -> Result<Vec<ControllerPreset>, String> {
+    serde_yaml_ng::from_str::<PresetFile>(yaml)
+        .map(|f| f.presets)
+        .map_err(|e| e.to_string())
+}
+
+/// Path of the user-editable presets file (desktop).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn user_presets_path() -> std::path::PathBuf {
+    crate::platform::config_dir().join("controllers.yml")
+}
+
+/// Presets for this platform: the user's file if present (desktop), else the built-in one.
+/// Returns the presets and an error message if the user's file failed to parse.
+pub fn load_controller_presets() -> (Vec<ControllerPreset>, Option<String>) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let (yaml, err_prefix) = match std::fs::read_to_string(user_presets_path()) {
+        Ok(s) => (s, "controllers.yml"),
+        Err(_) => (BUILTIN_CONTROLLERS_YAML.to_string(), "built-in presets"),
+    };
+    #[cfg(target_arch = "wasm32")]
+    let (yaml, err_prefix) = (BUILTIN_CONTROLLERS_YAML.to_string(), "built-in presets");
+    let platform = current_platform();
+    let keep =
+        |p: &ControllerPreset| p.platforms.is_empty() || p.platforms.iter().any(|x| x == platform);
+    match parse_controller_presets(&yaml) {
+        Ok(v) => (v.into_iter().filter(keep).collect(), None),
+        Err(e) => {
+            let fallback = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap_or_default();
+            (
+                fallback.into_iter().filter(keep).collect(),
+                Some(format!("{err_prefix}: {e}")),
+            )
+        }
+    }
+}
+
+impl ControllerPreset {
+    pub fn matches(&self, dev: &DeviceState) -> bool {
+        let n = dev.name.to_lowercase();
+        let by_name = self
+            .names
             .iter()
-            .any(|all| all.iter().all(|s| n.contains(s)))
-    })
+            .any(|all| !all.is_empty() && all.iter().all(|s| n.contains(&s.to_lowercase())));
+        let id = dev.vid_pid();
+        let by_id = self.ids.iter().any(|x| {
+            let x = x.to_lowercase();
+            id.as_deref() == Some(x.as_str()) || {
+                // Browsers put ids in the name: "Vendor: 057e Product: 2019"
+                let mut parts = x.split(':');
+                matches!((parts.next(), parts.next()), (Some(v), Some(p))
+                    if n.contains(&format!("vendor: {v}")) && n.contains(&format!("product: {p}")))
+            }
+        });
+        by_name || by_id
+    }
+
+    /// Replace gamepad bindings with this preset's (keyboard keys are kept).
+    pub fn apply(&self, c: &mut ControllerConfig) {
+        let keep_keys = |l: &mut Vec<Input>| l.retain(|i| matches!(i, Input::Key { .. }));
+        for b in N64Button::ALL {
+            let list = c.buttons.entry(b).or_default();
+            keep_keys(list);
+            if let Some(v) = self.buttons.get(&b) {
+                list.extend(v.iter().cloned());
+            }
+        }
+        if let Some(s) = &self.stick {
+            for d in crate::config::Dir::ALL {
+                let list = c.stick_bindings.get_mut(d);
+                keep_keys(list);
+                list.extend(s.clone().get_mut(d).iter().cloned());
+            }
+        }
+        if let Some(dz) = self.deadzone {
+            c.stick.deadzone = dz;
+        }
+    }
+
+    /// Build a preset from a controller's current gamepad bindings (for "Export").
+    pub fn from_bindings(name: &str, c: &ControllerConfig, dev: Option<&DeviceState>) -> Self {
+        let pad = |l: &Vec<Input>| -> Vec<Input> {
+            l.iter()
+                .filter(|i| !matches!(i, Input::Key { .. }))
+                .cloned()
+                .collect()
+        };
+        let buttons = c
+            .buttons
+            .iter()
+            .map(|(b, l)| (*b, pad(l)))
+            .filter(|(_, l)| !l.is_empty())
+            .collect();
+        let sb = &c.stick_bindings;
+        let raw = buttons_use_raw(&buttons)
+            || [&sb.up, &sb.down, &sb.left, &sb.right]
+                .iter()
+                .any(|l| l.iter().any(is_raw));
+        ControllerPreset {
+            name: name.to_string(),
+            note: String::new(),
+            names: dev
+                .map(|d| vec![vec![d.name.to_lowercase()]])
+                .unwrap_or_default(),
+            ids: dev.and_then(|d| d.vid_pid()).into_iter().collect(),
+            platforms: if raw {
+                vec![current_platform().to_string()]
+            } else {
+                vec![]
+            },
+            deadzone: Some(c.stick.deadzone),
+            buttons,
+            stick: Some(StickBindings {
+                up: pad(&sb.up),
+                down: pad(&sb.down),
+                left: pad(&sb.left),
+                right: pad(&sb.right),
+            }),
+        }
+    }
+
+    pub fn to_yaml(&self) -> String {
+        let file = PresetFile {
+            presets: vec![self.clone()],
+        };
+        let s = serde_yaml_ng::to_string(&file).unwrap_or_default();
+        // Emit just the list item so it can be pasted under `presets:`.
+        s.trim_start_matches("presets:\n").to_string()
+    }
 }
 
-/// Replace gamepad bindings (keeps keyboard keys).
-fn set_pad(c: &mut ControllerConfig, b: N64Button, inputs: Vec<Input>) {
-    let list = c.buttons.entry(b).or_default();
-    list.retain(|i| matches!(i, Input::Key { .. }));
-    list.extend(inputs);
+fn is_raw(i: &Input) -> bool {
+    matches!(
+        i,
+        Input::RawButton { .. } | Input::RawAxis { .. } | Input::RawHat { .. }
+    )
 }
 
-fn apply_8bitdo_64_xinput(c: &mut ControllerConfig) {
-    use N64Button::*;
-    use PadButton as P;
-    // B sits where an Xbox pad has X or B depending on firmware; bind both (no conflict: the
-    // controller has no other face buttons).
-    set_pad(c, A, vec![Input::button(P::South)]);
-    set_pad(c, B, vec![Input::button(P::West), Input::button(P::East)]);
-    set_pad(c, Z, vec![Input::button(P::LeftTrigger)]);
-    set_pad(c, Start, vec![Input::button(P::Start)]);
-    set_pad(c, L, vec![Input::button(P::LeftShoulder)]);
-    set_pad(
-        c,
-        R,
-        vec![
-            Input::button(P::RightShoulder),
-            Input::button(P::RightTrigger),
-        ],
-    );
-    set_pad(c, DUp, vec![Input::button(P::DPadUp)]);
-    set_pad(c, DDown, vec![Input::button(P::DPadDown)]);
-    set_pad(c, DLeft, vec![Input::button(P::DPadLeft)]);
-    set_pad(c, DRight, vec![Input::button(P::DPadRight)]);
-    set_pad(c, CUp, vec![Input::axis(PadAxis::RightStickY, true)]);
-    set_pad(c, CDown, vec![Input::axis(PadAxis::RightStickY, false)]);
-    set_pad(c, CLeft, vec![Input::axis(PadAxis::RightStickX, false)]);
-    set_pad(c, CRight, vec![Input::axis(PadAxis::RightStickX, true)]);
-    c.stick_bindings.use_pad_stick(false);
-    // The 8BitDo 64 stick is tuned to N64 travel already; a light deadzone is enough.
-    c.stick.deadzone = 0.05;
+fn buttons_use_raw(b: &BTreeMap<N64Button, Vec<Input>>) -> bool {
+    b.values().any(|l| l.iter().any(is_raw))
+}
+
+/// First preset that matches the device.
+pub fn suggested_preset<'a>(
+    presets: &'a [ControllerPreset],
+    dev: &DeviceState,
+) -> Option<&'a ControllerPreset> {
+    presets.iter().find(|p| p.matches(dev))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn dev(name: &str) -> DeviceState {
+        DeviceState {
+            name: name.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn builtin_yaml_parses() {
+        let p = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
+        assert!(p.len() >= 2);
+    }
+
     #[test]
     fn suggests_8bitdo() {
-        assert!(suggested_preset("8BitDo 64 BT").is_some());
-        assert!(suggested_preset("N64 Controller (Vendor: 057e Product: 2019)").is_some());
-        assert!(suggested_preset("Xbox Wireless Controller").is_none());
+        let all = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
+        assert!(suggested_preset(&all, &dev("8BitDo 64 BT")).is_some());
+        assert!(
+            suggested_preset(&all, &dev("N64 Controller (Vendor: 057e Product: 2019)")).is_some()
+        );
+        assert!(suggested_preset(&all, &dev("Xbox Wireless Controller")).is_none());
+    }
+
+    #[test]
+    fn export_roundtrip() {
+        let c = ControllerConfig::defaults(0, true);
+        let p = ControllerPreset::from_bindings("Mine", &c, Some(&dev("Pad")));
+        let yaml = format!("presets:\n{}", p.to_yaml());
+        let back = parse_controller_presets(&yaml).unwrap();
+        assert_eq!(back[0].buttons, p.buttons);
+        // Applying keeps keyboard keys and restores pad bindings.
+        let mut c2 = ControllerConfig::defaults(0, true);
+        back[0].apply(&mut c2);
+        assert_eq!(c2.buttons, c.buttons);
     }
 
     #[test]
