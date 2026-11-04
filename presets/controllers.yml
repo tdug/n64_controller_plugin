@@ -46,6 +46,8 @@ presets:
       Settings → Game Controllers).
     names: [["8bitdo", "64"]]
     ids: ["2dc8:3019"]
+    # Browsers number buttons differently; a web D-mode preset needs its own capture.
+    platforms: [macos, windows, linux]
     deadzone: 0.05
     buttons:
       A:      [{type: button, button: South}]

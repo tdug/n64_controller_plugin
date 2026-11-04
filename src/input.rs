@@ -236,6 +236,52 @@ pub fn hat_pressed(v: f32, dir: u8) -> bool {
 }
 
 impl Input {
+    /// The same control pushed the other way: the other half of an axis, or the opposite
+    /// hat direction. `None` for plain buttons and keys.
+    pub fn opposite(&self) -> Option<Input> {
+        Some(match self {
+            Input::Axis { axis, positive } => Input::Axis {
+                axis: *axis,
+                positive: !positive,
+            },
+            Input::RawAxis { code, positive } => Input::RawAxis {
+                code: *code,
+                positive: !positive,
+            },
+            Input::HidAxis {
+                report,
+                byte,
+                wide,
+                invert,
+                positive,
+            } => Input::HidAxis {
+                report: *report,
+                byte: *byte,
+                wide: *wide,
+                invert: *invert,
+                positive: !positive,
+            },
+            Input::RawHat { code, dir } => Input::RawHat {
+                code: *code,
+                dir: (dir + 2) % 4,
+            },
+            Input::HidHat { report, byte, dir } => Input::HidHat {
+                report: *report,
+                byte: *byte,
+                dir: (dir + 2) % 4,
+            },
+            _ => return None,
+        })
+    }
+
+    /// An analog axis half (not a button, key or hat).
+    pub fn is_axis(&self) -> bool {
+        matches!(
+            self,
+            Input::Axis { .. } | Input::RawAxis { .. } | Input::HidAxis { .. }
+        )
+    }
+
     pub fn key(code: u8) -> Self {
         Input::Key { code }
     }

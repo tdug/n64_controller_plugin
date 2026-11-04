@@ -202,6 +202,7 @@ impl ControllerPreset {
         if let Some(dz) = self.deadzone {
             c.stick.deadzone = dz;
         }
+        c.infer_group_modes();
     }
 
     /// Build a preset from a controller's current gamepad bindings (for "Export").
@@ -791,5 +792,68 @@ mod tests {
         // Small stick noise must not register as a button bit.
         assert_eq!(got(with(&[(3, 0xfe)])), None);
         assert_eq!(got(with(&[(4, 0x80)])), None);
+    }
+
+    #[test]
+    fn presets_set_group_mechanisms() {
+        use crate::config::{Group, GroupMode};
+        let all = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
+        let get = |n: &str| all.iter().find(|p| p.name == n).unwrap();
+        let mut c = ControllerConfig::defaults(0, false);
+        get("8BitDo 64 — D mode").apply(&mut c);
+        // D mode: D-pad arrives as DPadX/DPadY axes, C buttons on the right stick.
+        assert_eq!(c.group_modes.get(Group::DPad), GroupMode::DualAxis);
+        assert_eq!(c.group_modes.get(Group::C), GroupMode::DualAxis);
+        assert_eq!(c.group_modes.get(Group::Stick), GroupMode::DualAxis);
+        get("8BitDo 64 — S mode (HID)").apply(&mut c);
+        // S mode HID: hat D-pad and bit C buttons are "four buttons".
+        assert_eq!(c.group_modes.get(Group::DPad), GroupMode::FourButtons);
+        assert_eq!(c.group_modes.get(Group::C), GroupMode::FourButtons);
+        assert_eq!(c.group_modes.get(Group::Stick), GroupMode::DualAxis);
+    }
+
+    #[test]
+    fn mixed_axis_and_buttons_infer() {
+        use crate::config::{Dir, Group, GroupMode};
+        use crate::input::{Input, PadAxis, PadButton};
+        // e.g. C buttons split: X on an axis, Up/Down on two buttons.
+        let mut c = ControllerConfig::defaults(0, false);
+        *c.group_dir(Group::C, Dir::Right) = vec![Input::axis(PadAxis::RightStickX, true)];
+        *c.group_dir(Group::C, Dir::Left) = vec![Input::axis(PadAxis::RightStickX, false)];
+        *c.group_dir(Group::C, Dir::Up) = vec![Input::button(PadButton::North)];
+        *c.group_dir(Group::C, Dir::Down) = vec![Input::button(PadButton::West)];
+        c.infer_group_modes();
+        assert_eq!(c.group_modes.get(Group::C), GroupMode::AxisXButtonsY);
+        assert_eq!(
+            Input::HidAxis {
+                report: 63,
+                byte: 3,
+                wide: true,
+                invert: true,
+                positive: true
+            }
+            .opposite(),
+            Some(Input::HidAxis {
+                report: 63,
+                byte: 3,
+                wide: true,
+                invert: true,
+                positive: false
+            })
+        );
+        assert_eq!(
+            Input::HidHat {
+                report: 63,
+                byte: 2,
+                dir: 1
+            }
+            .opposite(),
+            Some(Input::HidHat {
+                report: 63,
+                byte: 2,
+                dir: 3
+            })
+        );
+        assert_eq!(Input::button(PadButton::South).opposite(), None);
     }
 }

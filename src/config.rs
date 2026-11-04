@@ -102,6 +102,114 @@ impl StickBindings {
     }
 }
 
+/// A four-direction control on the N64 side.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Group {
+    Stick,
+    DPad,
+    C,
+}
+
+impl Group {
+    pub const ALL: [Group; 3] = [Group::Stick, Group::DPad, Group::C];
+    pub fn label(self) -> &'static str {
+        match self {
+            Group::Stick => "Analog stick",
+            Group::DPad => "D-Pad",
+            Group::C => "C Buttons",
+        }
+    }
+    /// N64 button for a direction (D-pad / C); `None` for the analog stick.
+    pub fn button(self, d: Dir) -> Option<N64Button> {
+        use N64Button::*;
+        Some(match (self, d) {
+            (Group::Stick, _) => return None,
+            (Group::DPad, Dir::Up) => DUp,
+            (Group::DPad, Dir::Down) => DDown,
+            (Group::DPad, Dir::Left) => DLeft,
+            (Group::DPad, Dir::Right) => DRight,
+            (Group::C, Dir::Up) => CUp,
+            (Group::C, Dir::Down) => CDown,
+            (Group::C, Dir::Left) => CLeft,
+            (Group::C, Dir::Right) => CRight,
+        })
+    }
+}
+
+/// How a host controller provides a four-direction group.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GroupMode {
+    /// X axis + Y axis.
+    DualAxis,
+    /// X axis + Up/Down buttons.
+    AxisXButtonsY,
+    /// Left/Right buttons + Y axis.
+    ButtonsXAxisY,
+    /// Four buttons (or a hat / D-pad).
+    FourButtons,
+}
+
+impl GroupMode {
+    pub const ALL: [GroupMode; 4] = [
+        GroupMode::DualAxis,
+        GroupMode::AxisXButtonsY,
+        GroupMode::ButtonsXAxisY,
+        GroupMode::FourButtons,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            GroupMode::DualAxis => "X/Y axes (dual axis)",
+            GroupMode::AxisXButtonsY => "X axis + Up/Down buttons",
+            GroupMode::ButtonsXAxisY => "Left/Right buttons + Y axis",
+            GroupMode::FourButtons => "D-pad / four buttons",
+        }
+    }
+    /// (horizontal is an axis, vertical is an axis)
+    pub fn axes(self) -> (bool, bool) {
+        match self {
+            GroupMode::DualAxis => (true, true),
+            GroupMode::AxisXButtonsY => (true, false),
+            GroupMode::ButtonsXAxisY => (false, true),
+            GroupMode::FourButtons => (false, false),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GroupModes {
+    pub stick: GroupMode,
+    pub dpad: GroupMode,
+    pub c: GroupMode,
+}
+
+impl Default for GroupModes {
+    fn default() -> Self {
+        GroupModes {
+            stick: GroupMode::DualAxis,
+            dpad: GroupMode::FourButtons,
+            c: GroupMode::DualAxis,
+        }
+    }
+}
+
+impl GroupModes {
+    pub fn get(&self, g: Group) -> GroupMode {
+        match g {
+            Group::Stick => self.stick,
+            Group::DPad => self.dpad,
+            Group::C => self.c,
+        }
+    }
+    pub fn get_mut(&mut self, g: Group) -> &mut GroupMode {
+        match g {
+            Group::Stick => &mut self.stick,
+            Group::DPad => &mut self.dpad,
+            Group::C => &mut self.c,
+        }
+    }
+}
+
 /// While held (or toggled on), scales the analog stick — e.g. a "walk" button.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -194,6 +302,8 @@ pub struct ControllerConfig {
     pub pak_switch: Vec<Input>,
     pub buttons: BTreeMap<N64Button, Vec<Input>>,
     pub stick_bindings: StickBindings,
+    /// UI mechanism per direction group (bindings themselves are per direction).
+    pub group_modes: GroupModes,
     pub stick: StickSettings,
     pub modifiers: Vec<Modifier>,
     pub macros: Vec<Macro>,
@@ -208,6 +318,38 @@ impl Default for ControllerConfig {
 }
 
 impl ControllerConfig {
+    /// Bindings for one direction of a group.
+    pub fn group_dir(&mut self, g: Group, d: Dir) -> &mut Vec<Input> {
+        match g.button(d) {
+            Some(b) => self.buttons.entry(b).or_default(),
+            None => self.stick_bindings.get_mut(d),
+        }
+    }
+
+    /// Whether `pos`/`neg` directions share an axis (an input and its opposite).
+    fn has_axis_pair(&mut self, g: Group, pos: Dir, neg: Dir) -> bool {
+        let n = self.group_dir(g, neg).clone();
+        self.group_dir(g, pos).iter().any(|i| {
+            i.opposite().is_some_and(|o| {
+                n.contains(&o) && !matches!(o, Input::RawHat { .. } | Input::HidHat { .. })
+            })
+        })
+    }
+
+    /// Pick each group's mechanism from its current bindings (after a preset / guided setup).
+    pub fn infer_group_modes(&mut self) {
+        for g in Group::ALL {
+            let x = self.has_axis_pair(g, Dir::Right, Dir::Left);
+            let y = self.has_axis_pair(g, Dir::Up, Dir::Down);
+            *self.group_modes.get_mut(g) = match (x, y) {
+                (true, true) => GroupMode::DualAxis,
+                (true, false) => GroupMode::AxisXButtonsY,
+                (false, true) => GroupMode::ButtonsXAxisY,
+                (false, false) => GroupMode::FourButtons,
+            };
+        }
+    }
+
     pub fn defaults(port: usize, keyboard: bool) -> Self {
         use N64Button::*;
         use PadButton as P;
@@ -281,6 +423,7 @@ impl ControllerConfig {
             pak_switch: vec![],
             buttons,
             stick_bindings,
+            group_modes: GroupModes::default(),
             stick: StickSettings::default(),
             modifiers,
             macros: vec![],

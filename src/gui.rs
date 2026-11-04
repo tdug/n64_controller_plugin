@@ -1,6 +1,9 @@
 //! Configuration UI (egui). Runs natively (separate process from the emulator) and on the web.
 
-use crate::config::{Config, Dir, Macro, MacroMode, MacroStep, Modifier, PORTS, PakType, Playback};
+use crate::config::{
+    Config, ControllerConfig, Dir, Group, GroupMode, Macro, MacroMode, MacroStep, Modifier, PORTS,
+    PakType, Playback,
+};
 use crate::input::{DeviceSel, Input, InputManager, Snapshot};
 use crate::n64::{N64Button, N64State};
 use crate::runtime::{Runtime, evaluate_with, self_test};
@@ -19,6 +22,8 @@ const WARN: Color32 = Color32::from_rgb(255, 170, 60);
 enum Target {
     Button(N64Button),
     Stick(Dir),
+    /// Both halves of one axis of a direction group (`true` = horizontal: push right).
+    GroupAxis(Group, bool),
     Modifier(usize),
     MacroTrigger(usize),
     PakSwitch,
@@ -41,16 +46,35 @@ struct WizStep {
     extra: bool,
 }
 
-/// Guided setup order: every N64 button (with an optional second Z), then the stick.
-fn wizard_steps() -> Vec<WizStep> {
+/// The capture target for one direction of a group.
+fn dir_target(g: Group, d: Dir) -> Target {
+    match g.button(d) {
+        Some(b) => Target::Button(b),
+        None => Target::Stick(d),
+    }
+}
+
+fn dir_word(d: Dir) -> &'static str {
+    match d {
+        Dir::Up => "up",
+        Dir::Down => "down",
+        Dir::Left => "left",
+        Dir::Right => "right",
+    }
+}
+
+/// Guided setup order: face/shoulder buttons (with an optional second Z), then the D-pad,
+/// C buttons and stick, each following its group's mechanism (an axis step binds both halves).
+fn wizard_steps(c: &ControllerConfig) -> Vec<WizStep> {
+    use N64Button::*;
     let mut v = vec![];
-    for b in N64Button::ALL {
+    for b in [A, B, Z, Start, L, R] {
         v.push(WizStep {
             target: Target::Button(b),
             label: b.label().into(),
             extra: false,
         });
-        if b == N64Button::Z {
+        if b == Z {
             v.push(WizStep {
                 target: Target::Button(b),
                 label: "a second Z button (Skip if there isn't one)".into(),
@@ -58,15 +82,39 @@ fn wizard_steps() -> Vec<WizStep> {
             });
         }
     }
-    for d in Dir::ALL {
-        v.push(WizStep {
-            target: Target::Stick(d),
-            label: format!(
-                "the stick fully {}",
-                d.label().trim_start_matches("Stick ").to_lowercase()
-            ),
-            extra: false,
-        });
+    for g in [Group::DPad, Group::C, Group::Stick] {
+        let (hx, vy) = c.group_modes.get(g).axes();
+        let name = g.label();
+        if vy {
+            v.push(WizStep {
+                target: Target::GroupAxis(g, false),
+                label: format!("{name}: push up (Y axis)"),
+                extra: false,
+            });
+        } else {
+            for d in [Dir::Up, Dir::Down] {
+                v.push(WizStep {
+                    target: dir_target(g, d),
+                    label: format!("{name} {}", dir_word(d)),
+                    extra: false,
+                });
+            }
+        }
+        if hx {
+            v.push(WizStep {
+                target: Target::GroupAxis(g, true),
+                label: format!("{name}: push right (X axis)"),
+                extra: false,
+            });
+        } else {
+            for d in [Dir::Left, Dir::Right] {
+                v.push(WizStep {
+                    target: dir_target(g, d),
+                    label: format!("{name} {}", dir_word(d)),
+                    extra: false,
+                });
+            }
+        }
     }
     v
 }
@@ -191,7 +239,7 @@ impl App {
 
     /// Move guided setup on to step `next` (or finish).
     fn wizard_goto(&mut self, port: usize, next: usize) {
-        let steps = wizard_steps();
+        let steps = wizard_steps(&self.cfg.controllers[port]);
         if next < steps.len() {
             self.capture = Some(Capture {
                 port,
@@ -234,23 +282,46 @@ impl App {
                 }
             }
         }
-        let list = match target {
-            Target::Button(b) => c.buttons.entry(b).or_default(),
-            Target::Stick(d) => c.stick_bindings.get_mut(d),
-            Target::Modifier(i) => &mut c.modifiers[i].inputs,
-            Target::MacroTrigger(i) => &mut c.macros[i].trigger,
-            Target::PakSwitch => &mut c.pak_switch,
-        };
-        let step = wizard.map(|i| (i, wizard_steps().swap_remove(i)));
-        if let Some((_, s)) = &step {
-            if !s.extra {
-                // Guided setup replaces gamepad bindings, keeps keyboard keys.
-                list.retain(|i| matches!(i, Input::Key { .. }));
-            }
-        }
+        let step = wizard.map(|i| (i, wizard_steps(c).swap_remove(i)));
+        let replace = step.as_ref().is_some_and(|(_, s)| !s.extra);
+        let keep_keys = |l: &mut Vec<Input>| l.retain(|i| matches!(i, Input::Key { .. }));
         let text = input.label();
-        if !list.contains(&input) {
-            list.push(input);
+        if let Target::GroupAxis(g, horizontal) = target {
+            // One push binds both halves of the axis.
+            let (pos, neg) = if horizontal {
+                (Dir::Right, Dir::Left)
+            } else {
+                (Dir::Up, Dir::Down)
+            };
+            let opp = input.opposite();
+            for (d, inp) in [(pos, Some(input)), (neg, opp)] {
+                let list = c.group_dir(g, d);
+                if replace {
+                    keep_keys(list);
+                } else {
+                    list.retain(|i| !i.is_axis()); // a new axis replaces the old one
+                }
+                if let Some(inp) = inp {
+                    if !list.contains(&inp) {
+                        list.push(inp);
+                    }
+                }
+            }
+        } else {
+            let list = match target {
+                Target::Button(b) => c.buttons.entry(b).or_default(),
+                Target::Stick(d) => c.stick_bindings.get_mut(d),
+                Target::Modifier(i) => &mut c.modifiers[i].inputs,
+                Target::MacroTrigger(i) => &mut c.macros[i].trigger,
+                Target::PakSwitch => &mut c.pak_switch,
+                Target::GroupAxis(..) => unreachable!(),
+            };
+            if replace {
+                keep_keys(list);
+            }
+            if !list.contains(&input) {
+                list.push(input);
+            }
         }
         if let Some((i, s)) = step {
             self.wizard_log.push(format!("{} ← {text}", s.label));
@@ -497,7 +568,7 @@ impl App {
 
         section_if(ui, sub == 0, "Quick setup", |ui| {
             if let Some(i) = wiz {
-                let steps = wizard_steps();
+                let steps = wizard_steps(c);
                 ui.horizontal(|ui| {
                     ui.spinner();
                     ui.label(
@@ -625,7 +696,8 @@ impl App {
                 .striped(true)
                 .spacing([12.0, 4.0])
                 .show(ui, |ui| {
-                    for b in N64Button::ALL {
+                    use N64Button::*;
+                    for b in [A, B, Z, Start, L, R] {
                         let list = c.buttons.entry(b).or_default();
                         let active = snap.any_pressed(list, dev);
                         ui.label(
@@ -643,37 +715,13 @@ impl App {
                 });
         });
 
-        section_if(ui, sub == 0, "Analog stick inputs", |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Use left stick").clicked() {
-                    c.stick_bindings.use_pad_stick(false);
-                }
-                if ui.button("Use right stick").clicked() {
-                    c.stick_bindings.use_pad_stick(true);
+        for g in [Group::DPad, Group::C, Group::Stick] {
+            section_if(ui, sub == 0, g.label(), |ui| {
+                if let Some(t) = group_editor(ui, g, c, snap, dev, cap) {
+                    want_capture = Some(t);
                 }
             });
-            egui::Grid::new("stickb")
-                .num_columns(2)
-                .striped(true)
-                .spacing([12.0, 4.0])
-                .show(ui, |ui| {
-                    for d in Dir::ALL {
-                        let list = c.stick_bindings.get_mut(d);
-                        let v = snap.max_value(list, dev);
-                        ui.label(
-                            egui::RichText::new(d.label())
-                                .color(if v > 0.1 { LIVE } else { Color32::GRAY })
-                                .strong(),
-                        );
-                        if bind_cell(ui, list, cap == Some(Target::Stick(d)), |i| {
-                            snap.value(i, dev) > 0.5
-                        }) {
-                            want_capture = Some(Target::Stick(d));
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
+        }
 
         section_if(
             ui,
@@ -1250,6 +1298,173 @@ fn pak_combo(ui: &mut Ui, id: &str, v: &mut PakType) {
 }
 
 /// Binding chips + bind button. Returns true when the user wants to capture a new input.
+/// Removable chips for `items`; returns (index to remove, bind requested).
+fn chip_row(
+    ui: &mut Ui,
+    items: &[Input],
+    capturing: bool,
+    active: impl Fn(&Input) -> bool,
+    chip_text: impl Fn(&Input) -> String,
+) -> (Option<usize>, bool) {
+    let (mut remove, mut want) = (None, false);
+    ui.horizontal_wrapped(|ui| {
+        for (i, inp) in items.iter().enumerate() {
+            let chip = egui::Button::new(format!("{}  ✕", chip_text(inp)))
+                .small()
+                .fill(if active(inp) {
+                    Color32::from_rgb(40, 80, 50)
+                } else {
+                    ui.visuals().widgets.inactive.bg_fill
+                });
+            if ui.add(chip).on_hover_text("Click to remove").clicked() {
+                remove = Some(i);
+            }
+        }
+        if capturing {
+            ui.colored_label(ACCENT, "Push / press it now… (Esc cancels)");
+        } else if ui.small_button("➕ Bind").clicked() {
+            want = true;
+        }
+    });
+    (remove, want)
+}
+
+/// Editor for a four-direction group (stick, D-pad, C buttons) in its chosen mechanism.
+/// Returns a capture request.
+fn group_editor(
+    ui: &mut Ui,
+    g: Group,
+    c: &mut ControllerConfig,
+    snap: &Snapshot,
+    dev: Option<&crate::input::DeviceState>,
+    cap: Option<Target>,
+) -> Option<Target> {
+    let mut want = None;
+    ui.horizontal(|ui| {
+        ui.label("Mechanism");
+        let m = c.group_modes.get_mut(g);
+        egui::ComboBox::from_id_salt(("group_mode", g as u8))
+            .width(240.0)
+            .selected_text(m.label())
+            .show_ui(ui, |ui| {
+                for opt in GroupMode::ALL {
+                    ui.selectable_value(m, opt, opt.label());
+                }
+            });
+        if g == Group::Stick || g == Group::C {
+            if ui.small_button("Left stick").clicked() {
+                bind_pad_stick(c, g, false);
+            }
+            if ui.small_button("Right stick").clicked() {
+                bind_pad_stick(c, g, true);
+            }
+        }
+    });
+    let (hx, vy) = c.group_modes.get(g).axes();
+    let on = |i: &Input| snap.value(i, dev) > 0.5;
+    egui::Grid::new(("group", g as u8))
+        .num_columns(2)
+        .striped(true)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            for (axis, horizontal, pos, neg) in [
+                (vy, false, Dir::Up, Dir::Down),
+                (hx, true, Dir::Right, Dir::Left),
+            ] {
+                let negs = c.group_dir(g, neg).clone();
+                let pair = |i: &Input| i.opposite().is_some_and(|o| negs.contains(&o));
+                if axis {
+                    // Axis row: inputs on `pos` whose opposite is on `neg`.
+                    let items: Vec<Input> = c
+                        .group_dir(g, pos)
+                        .iter()
+                        .filter(|i| pair(i))
+                        .cloned()
+                        .collect();
+                    let live = items
+                        .iter()
+                        .any(|i| on(i) || i.opposite().is_some_and(|o| on(&o)));
+                    ui.label(
+                        egui::RichText::new(if horizontal { "X axis" } else { "Y axis" })
+                            .color(if live { LIVE } else { Color32::GRAY })
+                            .strong(),
+                    );
+                    let target = Target::GroupAxis(g, horizontal);
+                    let (rm, w) = chip_row(
+                        ui,
+                        &items,
+                        cap == Some(target),
+                        |i| on(i) || i.opposite().is_some_and(|o| on(&o)),
+                        |i| format!("{}  ⇄", i.label()),
+                    );
+                    if let Some(k) = rm {
+                        let inp = items[k].clone();
+                        let opp = inp.opposite();
+                        c.group_dir(g, pos).retain(|x| *x != inp);
+                        c.group_dir(g, neg).retain(|x| Some(x) != opp.as_ref());
+                    }
+                    if w {
+                        want = Some(target);
+                    }
+                    ui.end_row();
+                }
+                // Direction rows: always in button mode; in axis mode only for leftovers.
+                for d in [pos, neg] {
+                    let other = c.group_dir(g, if d == pos { neg } else { pos }).clone();
+                    let list = c.group_dir(g, d);
+                    let paired = |i: &Input| i.opposite().is_some_and(|o| other.contains(&o));
+                    let items: Vec<Input> = list
+                        .iter()
+                        .filter(|i| !axis || !paired(i))
+                        .cloned()
+                        .collect();
+                    if axis && items.is_empty() {
+                        continue;
+                    }
+                    let active = items.iter().any(&on);
+                    let label = format!("{} {}", if axis { "  also" } else { "" }, dir_word(d));
+                    ui.label(
+                        egui::RichText::new(label.trim().to_string())
+                            .color(if active { LIVE } else { Color32::GRAY })
+                            .strong(),
+                    );
+                    let target = dir_target(g, d);
+                    let (rm, w) = chip_row(ui, &items, cap == Some(target), &on, |i| i.label());
+                    if let Some(k) = rm {
+                        let inp = items[k].clone();
+                        c.group_dir(g, d).retain(|x| *x != inp);
+                    }
+                    if w {
+                        want = Some(target);
+                    }
+                    ui.end_row();
+                }
+            }
+        });
+    want
+}
+
+/// Bind a gamepad stick's axes to a group (and switch it to dual-axis).
+fn bind_pad_stick(c: &mut ControllerConfig, g: Group, right: bool) {
+    use crate::input::PadAxis;
+    let (x, y) = if right {
+        (PadAxis::RightStickX, PadAxis::RightStickY)
+    } else {
+        (PadAxis::LeftStickX, PadAxis::LeftStickY)
+    };
+    for (d, inp) in [
+        (Dir::Up, Input::axis(y, true)),
+        (Dir::Down, Input::axis(y, false)),
+        (Dir::Left, Input::axis(x, false)),
+        (Dir::Right, Input::axis(x, true)),
+    ] {
+        let l = c.group_dir(g, d);
+        l.retain(|i| !i.is_axis());
+        l.push(inp);
+    }
+    *c.group_modes.get_mut(g) = GroupMode::DualAxis;
+}
+
 /// Binding chips + bind button. Each chip lights up only while *its* input is active.
 fn bind_cell(
     ui: &mut Ui,
