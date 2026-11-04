@@ -441,7 +441,8 @@ impl App {
                 {
                     start_wizard = true;
                 }
-                if ui
+                if !cfg!(target_arch = "wasm32")
+                    && ui
                     .button("📤 Export bindings as YAML preset")
                     .on_hover_text("Copies this controller's gamepad bindings as a preset entry. Paste it under `presets:` in controllers.yml.")
                     .clicked()
@@ -465,7 +466,7 @@ impl App {
                     }
                 }
             }
-            if self.json.starts_with("- name:") {
+            if !cfg!(target_arch = "wasm32") && self.json.starts_with("- name:") {
                 ui.label("Exported preset (also on your clipboard):");
                 ui.add(
                     egui::TextEdit::multiline(&mut self.json)
