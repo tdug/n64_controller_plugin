@@ -183,15 +183,36 @@ pub enum Input {
         code: u32,
         dir: u8,
     },
+    /// One bit of a raw HID input report (`byte` counts from after the report id).
+    HidBit {
+        report: u8,
+        byte: u16,
+        bit: u8,
+    },
+    /// HID hat byte: 0-7 clockwise from up, anything else = released. `dir`: 0 up .. 3 left.
+    HidHat {
+        report: u8,
+        byte: u16,
+        dir: u8,
+    },
+    /// HID axis: unsigned, centred at half range; 16-bit little-endian if `wide`, else 8-bit.
+    HidAxis {
+        report: u8,
+        byte: u16,
+        #[serde(default)]
+        wide: bool,
+        /// Flip direction (e.g. Y axes where up is the low value).
+        #[serde(default)]
+        invert: bool,
+        positive: bool,
+    },
 }
 
-/// Is `dir` (0 up, 1 right, 2 down, 3 left) held on a single-axis hat value?
-pub fn hat_pressed(v: f32, dir: u8) -> bool {
-    if !(-1.1..=1.1).contains(&v) {
-        return false; // centred
+/// Is `dir` (0 up, 1 right, 2 down, 3 left) held at hat position `k` (0-7 clockwise from up)?
+pub fn hat_index_pressed(k: i32, dir: u8) -> bool {
+    if !(0..8).contains(&k) {
+        return false;
     }
-    // 8 positions clockwise from up.
-    let k = (((v + 1.0) * 3.5).round() as i32).rem_euclid(8);
     let dirs: &[u8] = match k {
         0 => &[0],
         1 => &[0, 1],
@@ -203,6 +224,15 @@ pub fn hat_pressed(v: f32, dir: u8) -> bool {
         _ => &[3, 0],
     };
     dirs.contains(&dir)
+}
+
+/// Is `dir` (0 up, 1 right, 2 down, 3 left) held on a single-axis hat value?
+pub fn hat_pressed(v: f32, dir: u8) -> bool {
+    if !(-1.1..=1.1).contains(&v) {
+        return false; // centred
+    }
+    // 8 positions clockwise from up.
+    hat_index_pressed((((v + 1.0) * 3.5).round() as i32).rem_euclid(8), dir)
 }
 
 impl Input {
@@ -229,6 +259,17 @@ impl Input {
                 "Pad hat #{code} {}",
                 ["Up", "Right", "Down", "Left"][(*dir as usize).min(3)]
             ),
+            Input::HidBit { byte, bit, .. } => format!("HID byte {byte} bit {bit}"),
+            Input::HidHat { byte, dir, .. } => format!(
+                "HID hat (byte {byte}) {}",
+                ["Up", "Right", "Down", "Left"][(*dir as usize).min(3)]
+            ),
+            Input::HidAxis { byte, positive, .. } => {
+                format!(
+                    "HID axis (byte {byte}){}",
+                    if *positive { "+" } else { "-" }
+                )
+            }
         }
     }
 }
@@ -261,9 +302,32 @@ pub struct DeviceState {
     pub ff: bool,
     pub vendor: Option<u16>,
     pub product: Option<u16>,
+    /// Raw HID device (bound byte-by-byte) rather than an OS gamepad.
+    pub is_hid: bool,
+    /// HID input reports: (report id, payload without the id byte).
+    pub hid: Vec<(u8, Vec<u8>)>,
 }
 
 impl DeviceState {
+    fn hid_report(&self, report: u8) -> Option<&[u8]> {
+        self.hid
+            .iter()
+            .find(|(r, _)| *r == report)
+            .map(|(_, p)| p.as_slice())
+    }
+
+    /// Normalized -1..1 value of a HID axis.
+    pub fn hid_axis(&self, report: u8, byte: u16, wide: bool) -> Option<f32> {
+        let p = self.hid_report(report)?;
+        let i = byte as usize;
+        Some(if wide {
+            let v = u16::from_le_bytes([*p.get(i)?, *p.get(i + 1)?]) as f32;
+            (v - 32768.0) / 32768.0
+        } else {
+            (*p.get(i)? as f32 - 128.0) / 128.0
+        })
+    }
+
     /// "vvvv:pppp" in lower-case hex, when known.
     pub fn vid_pid(&self) -> Option<String> {
         Some(format!("{:04x}:{:04x}", self.vendor?, self.product?))
@@ -341,6 +405,25 @@ impl Snapshot {
                     .find(|(c, _)| c == code)
                     .map_or(0.0, |(_, v)| hat_pressed(*v, *hd) as u8 as f32)
             }),
+            Input::HidBit { report, byte, bit } => dev
+                .and_then(|d| d.hid_report(*report)?.get(*byte as usize).copied())
+                .map_or(0.0, |b| ((b >> bit) & 1) as f32),
+            Input::HidHat {
+                report,
+                byte,
+                dir: hd,
+            } => dev
+                .and_then(|d| d.hid_report(*report)?.get(*byte as usize).copied())
+                .map_or(0.0, |b| hat_index_pressed(b as i32, *hd) as u8 as f32),
+            Input::HidAxis {
+                report,
+                byte,
+                wide,
+                invert,
+                positive,
+            } => dev
+                .and_then(|d| d.hid_axis(*report, *byte, *wide))
+                .map_or(0.0, |v| dir(if *invert { -v } else { v }, *positive)),
         }
     }
 
@@ -429,9 +512,90 @@ impl Snapshot {
                     ));
                 }
             }
+            if let Some(i) = detect_hid(d, b) {
+                return Some((i, Some(d.id)));
+            }
         }
         None
     }
+}
+
+/// Is byte `i` part of a 16-bit value sitting near the centre (an analog axis at rest)?
+fn axis_like(p: &[u8], i: usize) -> bool {
+    let near = |lo: usize| {
+        p.get(lo + 1)
+            .map(|hi| u16::from_le_bytes([p[lo], *hi]).abs_diff(0x8000) < 0x1800)
+            .unwrap_or(false)
+    };
+    near(i) || (i > 0 && near(i - 1))
+}
+
+/// New HID input between `base` and `now` for binding capture: a single bit turning on, a hat
+/// leaving its released state, or an analog axis moving far from centre.
+fn detect_hid(now: &DeviceState, base: &DeviceState) -> Option<Input> {
+    for (report, p) in &now.hid {
+        let Some(b) = base.hid_report(*report) else {
+            continue;
+        };
+        for i in 0..p.len().min(b.len()) {
+            if axis_like(b, i) {
+                // Axis bytes: bind when the 16-bit value moves far from centre.
+                let lo = if i > 0 && axis_like(b, i - 1) && !axis_like_start(b, i) {
+                    continue;
+                } else {
+                    i
+                };
+                let (Some(v), Some(w)) = (
+                    now.hid_axis(*report, lo as u16, true),
+                    base.hid_axis(*report, lo as u16, true),
+                ) else {
+                    continue;
+                };
+                if v.abs() > 0.6 && w.abs() < 0.3 {
+                    return Some(Input::HidAxis {
+                        report: *report,
+                        byte: lo as u16,
+                        wide: true,
+                        invert: false,
+                        positive: v > 0.0,
+                    });
+                }
+                continue;
+            }
+            let (was, is) = (b[i], p[i]);
+            if was == is {
+                continue;
+            }
+            if was >= 8 && was <= 15 && is < 8 {
+                if let Some(dir) = (0..4).find(|dir| hat_index_pressed(is as i32, *dir)) {
+                    return Some(Input::HidHat {
+                        report: *report,
+                        byte: i as u16,
+                        dir,
+                    });
+                }
+            }
+            let on = is & !was;
+            if on.count_ones() == 1 && (was ^ is) == on {
+                return Some(Input::HidBit {
+                    report: *report,
+                    byte: i as u16,
+                    bit: on.trailing_zeros() as u8,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// First byte of a centred 16-bit pair (not the high byte of the previous pair).
+fn axis_like_start(p: &[u8], i: usize) -> bool {
+    // Pairs are aligned from the first axis-like byte of each run.
+    let mut j = i;
+    while j > 0 && axis_like(p, j - 1) {
+        j -= 1;
+    }
+    (i - j) % 2 == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +746,20 @@ pub fn sdl_scancode_to_vk(sc: i32) -> Option<u8> {
 pub struct InputManager {
     gilrs: Option<gilrs::Gilrs>,
     rumble: HashMap<usize, gilrs::ff::Effect>,
+    #[cfg(not(target_arch = "wasm32"))]
+    hid: Option<(Vec<(u16, u16)>, crate::hid::HidReader)>,
+}
+
+/// Device ids for raw HID devices start here (gilrs ids are small).
+pub const HID_ID_BASE: usize = 100_000;
+
+/// Parse "vvvv:pppp".
+pub fn parse_vid_pid(s: &str) -> Option<(u16, u16)> {
+    let (v, p) = s.split_once(':')?;
+    Some((
+        u16::from_str_radix(v, 16).ok()?,
+        u16::from_str_radix(p, 16).ok()?,
+    ))
 }
 
 impl Default for InputManager {
@@ -606,18 +784,61 @@ impl InputManager {
         InputManager {
             gilrs,
             rumble: HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            hid: None,
+        }
+    }
+
+    /// Raw HID devices (vendor:product) to read. Desktop only; the browser asks via WebHID.
+    pub fn set_hid_devices(&mut self, ids: &[String]) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ids: Vec<(u16, u16)> = ids.iter().filter_map(|s| parse_vid_pid(s)).collect();
+            if self.hid.as_ref().map(|(i, _)| i) != Some(&ids) {
+                self.hid =
+                    (!ids.is_empty()).then(|| (ids.clone(), crate::hid::HidReader::new(ids)));
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = ids;
+    }
+
+    fn poll_hid(&self, snap: &mut Snapshot) {
+        let mut push = |i: usize, name: String, vid: u16, pid: u16, reports: Vec<(u8, Vec<u8>)>| {
+            snap.devices.push(DeviceState {
+                id: HID_ID_BASE + i,
+                uuid: format!("hid:{vid:04x}:{pid:04x}"),
+                name: format!("{name} (HID)"),
+                vendor: Some(vid),
+                product: Some(pid),
+                is_hid: true,
+                hid: reports,
+                ..Default::default()
+            });
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((_, r)) = &self.hid {
+            for (i, d) in r.devices().into_iter().enumerate() {
+                push(i, d.name, d.vid, d.pid, d.reports.into_iter().collect());
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        for (i, d) in web_hid::devices().into_iter().enumerate() {
+            push(i, d.name, d.vid, d.pid, d.reports);
         }
     }
 
     /// Refresh `snap` with current device and keyboard state.
     pub fn poll(&mut self, snap: &mut Snapshot, allow_direct_keys: bool) {
         read_keyboard(&mut snap.keys, allow_direct_keys);
-        let Some(g) = self.gilrs.as_mut() else {
-            snap.devices.clear();
-            return;
-        };
-        while g.next_event().is_some() {}
         snap.devices.clear();
+        self.poll_gilrs(snap);
+        self.poll_hid(snap);
+    }
+
+    fn poll_gilrs(&mut self, snap: &mut Snapshot) {
+        let Some(g) = self.gilrs.as_mut() else { return };
+        while g.next_event().is_some() {}
         for (id, pad) in g.gamepads() {
             let mut d = DeviceState {
                 id: usize::from(id),
@@ -705,5 +926,56 @@ mod tests {
         assert!(hat_pressed(0.1429, 2)); // down
         assert!(hat_pressed(0.7143, 3)); // left
         assert!(hat_pressed(-0.7143, 0) && hat_pressed(-0.7143, 1)); // up-right
+    }
+}
+
+/// WebHID bridge (see `index.html`): devices the user granted, with their latest reports.
+#[cfg(target_arch = "wasm32")]
+pub mod web_hid {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(catch, js_name = tdugHidJson)]
+        fn hid_json() -> Result<String, JsValue>;
+        #[wasm_bindgen(catch, js_name = tdugHidConnect)]
+        fn hid_connect() -> Result<JsValue, JsValue>;
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Raw {
+        name: String,
+        vid: u16,
+        pid: u16,
+        reports: std::collections::BTreeMap<String, Vec<u8>>,
+    }
+
+    pub struct WebHidDevice {
+        pub name: String,
+        pub vid: u16,
+        pub pid: u16,
+        pub reports: Vec<(u8, Vec<u8>)>,
+    }
+
+    pub fn devices() -> Vec<WebHidDevice> {
+        let raw: Vec<Raw> =
+            serde_json::from_str(&hid_json().unwrap_or_default()).unwrap_or_default();
+        raw.into_iter()
+            .map(|r| WebHidDevice {
+                name: r.name,
+                vid: r.vid,
+                pid: r.pid,
+                reports: r
+                    .reports
+                    .into_iter()
+                    .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Show the browser's HID device picker (must run from a user gesture).
+    pub fn request() {
+        let _ = hid_connect();
     }
 }

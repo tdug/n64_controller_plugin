@@ -8,8 +8,10 @@ An N64 controller plugin written in Rust. One library works with **Project64** (
 
 - **4 controllers**, each bound to keyboard keys and/or any gamepad. Gamepads are read through [gilrs](https://gitlab.com/gilrs-project/gilrs): Windows.Gaming.Input on Windows, evdev on Linux, IOKit on macOS.
 - **Bindings**: each N64 button and stick direction accepts several inputs. Analog axes, triggers and buttons can all be bound to anything.
+- **Raw HID bindings**: buttons, hats and axes can be bound directly to bits and bytes of a controller's HID reports. This is for pads the OS maps badly, such as the 8BitDo 64 in S mode. Desktop reads the devices listed in the config's `hid_devices` (default `057e:2019`); the browser uses WebHID.
 - **Quick setup** (presets live in [`presets/controllers.yml`](presets/controllers.yml))
   - Controller presets: the 8BitDo 64 in D mode ("8BitDo 64 BT") and S mode ("N64 Controller", which also fits Nintendo's Switch Online N64 pad). When one of these is the selected gamepad, the UI offers a one-click button to apply its preset.
+  - **Mode switch**: for controllers with several modes (8BitDo 64 D/S), the detected mode is shown and each mode has its own preset.
   - **Guided setup**: press each N64 button when prompted. It works with any controller or adapter that has no preset, and it keeps your keyboard keys.
   - **Export bindings as YAML preset**: turns your current bindings into a preset entry for the file.
   - The file is compiled into the plugin and the web page. On desktop, *Settings → Open presets file* copies it to your data folder, where your edits take effect without a rebuild.
@@ -69,7 +71,7 @@ The same UI compiles to WebAssembly and uses the browser Gamepad API.
 
 - **Works**: bindings, calibration, curves, macros, and the self-test.
 - **Disabled**: rumble (gilrs has no web force feedback), pak files, and the emulator plugin.
-- **8BitDo 64**: use **D mode** in the browser. In S mode it imitates a Switch controller, and Chrome leaves it in Nintendo's basic HID report mode, which the Gamepad API doesn't map usefully. Supporting S mode in the browser would need a separate WebHID Switch-protocol driver. S mode works on desktop.
+- **8BitDo 64 in S mode** (and Nintendo's Switch Online N64 controller): the browser's Gamepad API can't map it, so the page offers **Connect via HID**, which uses WebHID (Chrome/Edge) and applies the raw-HID preset. D mode works through the normal Gamepad API.
 - **Debug tab** (browser only) shows three views:
   - the unfiltered Gamepad API: every button and axis index, plus the mapping type;
   - the plugin's view of each pad;

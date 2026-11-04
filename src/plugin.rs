@@ -144,6 +144,7 @@ fn input_thread(sh: Arc<Shared>, stop: Arc<AtomicBool>) {
         windows_sys::Win32::Media::timeBeginPeriod(1);
     }
     let mut mgr = InputManager::new();
+    mgr.set_hid_devices(&lock(&sh.rt).config.hid_devices);
     let mut snap = Snapshot::default();
     let mut rumbling: [Option<usize>; PORTS] = [None; PORTS];
     let mut mtime = storage::mtime();
@@ -186,6 +187,7 @@ fn input_thread(sh: Arc<Shared>, stop: Arc<AtomicBool>) {
             if m != mtime {
                 mtime = m;
                 reload_config(&sh);
+                mgr.set_hid_devices(&lock(&sh.rt).config.hid_devices);
             }
         }
         if last_flush.elapsed() > Duration::from_secs(1) {

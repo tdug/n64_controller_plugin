@@ -85,6 +85,15 @@ pub struct ControllerPreset {
     /// web / windows / macos / linux; empty = all.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub platforms: Vec<String>,
+    /// Controllers with several modes: presets sharing a `family` are offered as a mode switch.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub family: String,
+    /// Mode label within the family (e.g. "D", "S").
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub mode: String,
+    /// Where these bindings come from: "gamepad" (default, OS gamepad layer) or "hid" (raw HID).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadzone: Option<f32>,
     pub buttons: BTreeMap<N64Button, Vec<Input>>,
@@ -147,7 +156,14 @@ pub fn load_controller_presets() -> (Vec<ControllerPreset>, Option<String>) {
 }
 
 impl ControllerPreset {
+    pub fn is_hid(&self) -> bool {
+        self.source == "hid"
+    }
+
     pub fn matches(&self, dev: &DeviceState) -> bool {
+        if self.is_hid() != dev.is_hid {
+            return false;
+        }
         let n = dev.name.to_lowercase();
         let by_name = self
             .names
@@ -210,6 +226,13 @@ impl ControllerPreset {
         ControllerPreset {
             name: name.to_string(),
             note: String::new(),
+            family: String::new(),
+            mode: String::new(),
+            source: if dev.is_some_and(|d| d.is_hid) {
+                "hid".into()
+            } else {
+                String::new()
+            },
             names: dev
                 .map(|d| vec![vec![d.name.to_lowercase()]])
                 .unwrap_or_default(),
@@ -257,6 +280,28 @@ pub fn suggested_preset<'a>(
     dev: &DeviceState,
 ) -> Option<&'a ControllerPreset> {
     presets.iter().find(|p| p.matches(dev))
+}
+
+/// All presets in the device's family (for the mode switch); empty if it has none.
+pub fn family_of<'a>(
+    presets: &'a [ControllerPreset],
+    dev: &DeviceState,
+) -> Vec<&'a ControllerPreset> {
+    match suggested_preset(presets, dev) {
+        Some(p) if !p.family.is_empty() => {
+            presets.iter().filter(|x| x.family == p.family).collect()
+        }
+        _ => vec![],
+    }
+}
+
+/// True for a Switch-protocol N64 pad (8BitDo 64 in S mode, or Nintendo's Switch Online N64
+/// controller). Browsers leave these in Nintendo's basic HID mode, which they can't map.
+pub fn is_switch_n64(dev: &DeviceState) -> bool {
+    let n = dev.name.to_lowercase();
+    dev.vid_pid().as_deref() == Some("057e:2019")
+        || (n.contains("057e") && n.contains("2019"))
+        || n.contains("nso n64")
 }
 
 #[cfg(test)]
@@ -603,13 +648,148 @@ mod tests {
         // S mode is unsupported in the browser: no preset should claim it.
         assert_eq!(name(&web, &browser_s), None);
     }
-}
 
-/// True for a Switch-protocol N64 pad (8BitDo 64 in S mode, or Nintendo's Switch Online N64
-/// controller). Browsers leave these in Nintendo's basic HID mode, which they can't map.
-pub fn is_switch_n64(dev: &DeviceState) -> bool {
-    let n = dev.name.to_lowercase();
-    dev.vid_pid().as_deref() == Some("057e:2019")
-        || (n.contains("057e") && n.contains("2019"))
-        || n.contains("nso n64")
+    // Captured idle report 0x3F payload from the 8BitDo 64 in S mode (tools/hid-listen).
+    const IDLE: [u8; 11] = [
+        0x00, 0x00, 0x08, 0xff, 0x7f, 0xff, 0x7f, 0x00, 0x80, 0x00, 0x80,
+    ];
+
+    fn hid_dev(payload: [u8; 11]) -> DeviceState {
+        DeviceState {
+            name: "N64 Controller (HID)".into(),
+            vendor: Some(0x057e),
+            product: Some(0x2019),
+            is_hid: true,
+            hid: vec![(63, payload.to_vec())],
+            ..Default::default()
+        }
+    }
+
+    fn with(changes: &[(usize, u8)]) -> [u8; 11] {
+        let mut p = IDLE;
+        for (i, v) in changes {
+            p[*i] = *v;
+        }
+        p
+    }
+
+    #[test]
+    fn eightbitdo_s_mode_hid_capture() {
+        use N64Button as N;
+        let all = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
+        let preset = all
+            .iter()
+            .find(|p| p.name == "8BitDo 64 — S mode (HID)")
+            .unwrap();
+        assert!(preset.matches(&hid_dev(IDLE)));
+        // The HID preset must not grab the OS-gamepad view of the same controller, and vice versa.
+        let gamepad_view = DeviceState {
+            name: "NSO N64 Controller".into(),
+            vendor: Some(0x057e),
+            product: Some(0x2019),
+            ..Default::default()
+        };
+        assert!(!preset.matches(&gamepad_view));
+        let mut c = ControllerConfig::defaults(0, false);
+        preset.apply(&mut c);
+        let eval = |p: [u8; 11]| {
+            let d = hid_dev(p);
+            let snap = Snapshot {
+                devices: vec![d.clone()],
+                ..Default::default()
+            };
+            evaluate_with(&c, &snap, Some(&d), 1.0).0
+        };
+        assert_eq!(eval(IDLE).buttons, 0);
+        assert_eq!((eval(IDLE).x, eval(IDLE).y), (0, 0));
+        let cases: Vec<(&str, [u8; 11], N)> = vec![
+            ("A", with(&[(0, 0x02)]), N::A),
+            ("B", with(&[(0, 0x01)]), N::B),
+            ("Z left", with(&[(0, 0x40)]), N::Z),
+            ("Z right", with(&[(1, 0x04)]), N::Z),
+            ("Start", with(&[(1, 0x02)]), N::Start),
+            ("L", with(&[(0, 0x10)]), N::L),
+            ("R", with(&[(0, 0x20)]), N::R),
+            ("C up", with(&[(0, 0x04)]), N::CUp),
+            ("C right", with(&[(1, 0x01)]), N::CRight),
+            ("C down", with(&[(0, 0x80)]), N::CDown),
+            ("C left", with(&[(0, 0x08)]), N::CLeft),
+            ("D up", with(&[(2, 0)]), N::DUp),
+            ("D right", with(&[(2, 2)]), N::DRight),
+            ("D down", with(&[(2, 4)]), N::DDown),
+            ("D left", with(&[(2, 6)]), N::DLeft),
+        ];
+        for (label, p, want) in cases {
+            assert_eq!(eval(p).buttons, want.mask(), "{label}");
+        }
+        assert_eq!(eval(with(&[(1, 0x10)])).buttons, 0, "Home unbound");
+        assert_eq!(eval(with(&[(1, 0x20)])).buttons, 0, "Star unbound");
+        // Stick: right = X 0xffff, up = Y 0x0000 (inverted).
+        let r = eval(with(&[(3, 0xff), (4, 0xff)]));
+        assert!(r.x > 80 && r.y == 0, "right {r:?}");
+        let u = eval(with(&[(5, 0x00), (6, 0x00)]));
+        assert!(u.y > 80 && u.x == 0, "up {u:?}");
+        let l = eval(with(&[(3, 0x00), (4, 0x00)]));
+        assert!(l.x < -80, "left {l:?}");
+        let d = eval(with(&[(5, 0xff), (6, 0xff)]));
+        assert!(d.y < -80, "down {d:?}");
+    }
+
+    #[test]
+    fn guided_capture_detects_hid() {
+        use crate::input::Input;
+        let snap = |p| Snapshot {
+            devices: vec![hid_dev(p)],
+            ..Default::default()
+        };
+        let base = snap(IDLE);
+        let got = |p| snap(p).detect_new(&base).map(|(i, _)| i);
+        assert_eq!(
+            got(with(&[(0, 0x02)])),
+            Some(Input::HidBit {
+                report: 63,
+                byte: 0,
+                bit: 1
+            })
+        );
+        assert_eq!(
+            got(with(&[(1, 0x04)])),
+            Some(Input::HidBit {
+                report: 63,
+                byte: 1,
+                bit: 2
+            })
+        );
+        assert_eq!(
+            got(with(&[(2, 2)])),
+            Some(Input::HidHat {
+                report: 63,
+                byte: 2,
+                dir: 1
+            })
+        );
+        assert_eq!(
+            got(with(&[(3, 0xff), (4, 0xff)])),
+            Some(Input::HidAxis {
+                report: 63,
+                byte: 3,
+                wide: true,
+                invert: false,
+                positive: true
+            })
+        );
+        assert_eq!(
+            got(with(&[(5, 0x00), (6, 0x00)])),
+            Some(Input::HidAxis {
+                report: 63,
+                byte: 5,
+                wide: true,
+                invert: false,
+                positive: false
+            })
+        );
+        // Small stick noise must not register as a button bit.
+        assert_eq!(got(with(&[(3, 0xfe)])), None);
+        assert_eq!(got(with(&[(4, 0x80)])), None);
+    }
 }

@@ -34,13 +34,16 @@
 
 presets:
   - name: "8BitDo 64 — D mode"
+    family: "8BitDo 64"
+    mode: D
     note: >-
       Verified on macOS (Bluetooth, D switch position; reports as "8BitDo 64", 2dc8:3019).
       Both back triggers are Z. The D-pad reports as DPadX/DPadY axes. Don't bind the DPadLeft
       *button*: the mapping database labels the Star button as DPadLeft (code 589842).
       Extra buttons (unbound; free for macros, modifiers or the pak-swap hotkey):
       Home/8BitDo logo = Mode, Star = DPadLeft button (589842), Dash = Select,
-      stick click = LeftThumb.
+      stick click = LeftThumb. On macOS, Home also opens the Games app (turn off in System
+      Settings → Game Controllers).
     names: [["8bitdo", "64"]]
     ids: ["2dc8:3019"]
     deadzone: 0.05
@@ -66,6 +69,8 @@ presets:
       right: [{type: axis, axis: LeftStickX, positive: true}]
 
   - name: "8BitDo 64 — S mode (macOS)"
+    family: "8BitDo 64"
+    mode: S
     note: >-
       Verified on macOS (Bluetooth, S switch position). In S mode the 8BitDo identifies as
       Nintendo's Switch Online N64 controller ("NSO N64 Controller", 057e:2019); this preset
@@ -98,6 +103,38 @@ presets:
       left:  [{type: axis, axis: LeftStickX, positive: false}]
       right: [{type: axis, axis: LeftStickX, positive: true}]
 
-# Not supported yet: 8BitDo 64 S mode in the browser. Chrome on macOS leaves it in Nintendo's
-# basic HID mode (report 0x3F); full support needs a WebHID Switch-protocol driver.
-# Use D mode in the browser.
+  - name: "8BitDo 64 — S mode (HID)"
+    family: "8BitDo 64"
+    mode: S
+    source: hid
+    note: >-
+      Raw HID bindings for S mode (Nintendo basic report 0x3F), captured byte-by-byte with
+      tools/hid-listen. Works anywhere the device can be opened as HID: desktop, and Chrome/Edge
+      via WebHID. Also fits Nintendo's Switch Online N64 controller. Home = byte 1 bit 4 and
+      Star = byte 1 bit 5 are left unbound (on macOS, Home also opens the Games app). Dash and
+      stick click send nothing in S mode.
+    ids: ["057e:2019"]
+    deadzone: 0.05
+    buttons:
+      A:      [{type: hid_bit, report: 63, byte: 0, bit: 1}]
+      B:      [{type: hid_bit, report: 63, byte: 0, bit: 0}]
+      Z:      [{type: hid_bit, report: 63, byte: 0, bit: 6}, {type: hid_bit, report: 63, byte: 1, bit: 2}]
+      Start:  [{type: hid_bit, report: 63, byte: 1, bit: 1}]
+      L:      [{type: hid_bit, report: 63, byte: 0, bit: 4}]
+      R:      [{type: hid_bit, report: 63, byte: 0, bit: 5}]
+      DUp:    [{type: hid_hat, report: 63, byte: 2, dir: 0}]
+      DRight: [{type: hid_hat, report: 63, byte: 2, dir: 1}]
+      DDown:  [{type: hid_hat, report: 63, byte: 2, dir: 2}]
+      DLeft:  [{type: hid_hat, report: 63, byte: 2, dir: 3}]
+      CUp:    [{type: hid_bit, report: 63, byte: 0, bit: 2}]
+      CDown:  [{type: hid_bit, report: 63, byte: 0, bit: 7}]
+      CLeft:  [{type: hid_bit, report: 63, byte: 0, bit: 3}]
+      CRight: [{type: hid_bit, report: 63, byte: 1, bit: 0}]
+    stick:
+      up:    [{type: hid_axis, report: 63, byte: 5, wide: true, invert: true, positive: true}]
+      down:  [{type: hid_axis, report: 63, byte: 5, wide: true, invert: true, positive: false}]
+      left:  [{type: hid_axis, report: 63, byte: 3, wide: true, positive: false}]
+      right: [{type: hid_axis, report: 63, byte: 3, wide: true, positive: true}]
+
+# In the browser, S mode works only through WebHID (the HID preset above); the Gamepad API
+# path can't read it.

@@ -3,6 +3,8 @@
 
 pub mod config;
 pub mod gui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hid;
 pub mod input;
 pub mod n64;
 pub mod pak;

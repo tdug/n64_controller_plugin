@@ -18,20 +18,33 @@
     // WebHID bridge for the Debug tab (raw HID input reports). Chrome/Edge only.
     window.tdugHid = [];
     window.tdugHidSupported = () => 'hid' in navigator;
+    const tdugHidOpen = async (d) => {
+      if (window.tdugHid.some(e => e.device === d)) return;
+      if (!d.opened) await d.open();
+      const entry = { device: d, name: d.productName || '?', vid: d.vendorId, pid: d.productId, reports: {}, count: 0 };
+      window.tdugHid.push(entry);
+      d.addEventListener('inputreport', (e) => {
+        entry.reports[String(e.reportId)] = Array.from(new Uint8Array(e.data.buffer));
+        entry.count++;
+      });
+    };
+    // Ask for a controller (gamepad/joystick usages); needs a user gesture.
     window.tdugHidConnect = async () => {
       if (!('hid' in navigator)) return;
-      const devices = await navigator.hid.requestDevice({ filters: [] });
-      for (const d of devices) {
-        if (!d.opened) await d.open();
-        const entry = { name: d.productName || '?', vid: d.vendorId, pid: d.productId, reports: {}, count: 0 };
-        window.tdugHid.push(entry);
-        d.addEventListener('inputreport', (e) => {
-          entry.reports[String(e.reportId)] = Array.from(new Uint8Array(e.data.buffer));
-          entry.count++;
-        });
-      }
+      const devices = await navigator.hid.requestDevice({
+        filters: [{ usagePage: 0x01, usage: 0x05 }, { usagePage: 0x01, usage: 0x04 }],
+      });
+      for (const d of devices) await tdugHidOpen(d);
     };
-    window.tdugHidJson = () => JSON.stringify(window.tdugHid);
+    if ('hid' in navigator) {
+      // Devices allowed on a previous visit open without a prompt.
+      navigator.hid.getDevices().then(ds => ds.forEach(d => tdugHidOpen(d).catch(() => {})));
+      navigator.hid.addEventListener('connect', (e) => tdugHidOpen(e.device).catch(() => {}));
+      navigator.hid.addEventListener('disconnect', (e) => {
+        window.tdugHid = window.tdugHid.filter(x => x.device !== e.device);
+      });
+    }
+    window.tdugHidJson = () => JSON.stringify(window.tdugHid.map(({ device, ...rest }) => rest));
     // Unfiltered Gamepad API state, for the Debug tab.
     window.tdugPadsJson = () => JSON.stringify(Array.from(navigator.getGamepads ? navigator.getGamepads() : [])
       .filter(Boolean)

@@ -102,6 +102,10 @@ pub struct App {
     presets_error: Option<String>,
     /// What each guided-setup step captured.
     wizard_log: Vec<String>,
+    /// Port waiting for a Switch-mode HID device to appear (then assign it + apply its preset).
+    hid_assign: Option<usize>,
+    /// Instruction shown after choosing a mode the controller isn't in.
+    mode_hint: Option<String>,
 }
 
 impl App {
@@ -130,6 +134,8 @@ impl App {
             controller_presets,
             presets_error,
             wizard_log: vec![],
+            hid_assign: None,
+            mode_hint: None,
         }
     }
 
@@ -160,6 +166,27 @@ impl App {
             crate::input::set_event_key(0xA2, i.modifiers.ctrl);
             crate::input::set_event_key(0xA4, i.modifiers.alt);
         });
+    }
+
+    /// Once the requested Switch-mode HID device shows up, select it and apply its preset.
+    fn finish_hid_assign(&mut self) {
+        let Some(port) = self.hid_assign else { return };
+        let Some(d) = self
+            .snap
+            .devices
+            .iter()
+            .find(|d| d.is_hid && crate::presets::is_switch_n64(d))
+        else {
+            return;
+        };
+        let sel = self.snap.select(d);
+        let c = &mut self.cfg.controllers[port];
+        c.device = sel;
+        if let Some(p) = crate::presets::suggested_preset(&self.controller_presets, d) {
+            p.apply(c);
+            self.status = format!("Using {} with “{}”", d.name, p.name);
+        }
+        self.hid_assign = None;
     }
 
     /// Move guided setup on to step `next` (or finish).
@@ -235,6 +262,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.pump_keys(ui);
+        self.mgr.set_hid_devices(&self.cfg.hid_devices);
         self.mgr.poll(&mut self.snap, true);
         if self.preview.config != self.cfg {
             self.preview.set_config(self.cfg.clone());
@@ -252,6 +280,7 @@ impl eframe::App for App {
             self.trail.pop_front();
         }
         self.handle_capture();
+        self.finish_hid_assign();
         self.update_recorders(port, raw, out);
 
         egui::Panel::top("tabs").show(ui, |ui| self.top_bar(ui));
@@ -374,7 +403,13 @@ impl App {
                 ui.colored_label(WARN, "not connected");
             }
         });
-        if cfg!(target_arch = "wasm32") && dev.is_some_and(crate::presets::is_switch_n64) {
+        // Switch-protocol pad seen through the OS/browser gamepad layer: offer raw HID instead.
+        let mut use_hid = false;
+        if dev.is_some_and(|d| !d.is_hid && crate::presets::is_switch_n64(d)) {
+            let hid_dev = snap
+                .devices
+                .iter()
+                .find(|d| d.is_hid && crate::presets::is_switch_n64(d));
             egui::Frame::new()
                 .fill(Color32::from_rgb(70, 45, 10))
                 .inner_margin(8.0)
@@ -382,14 +417,29 @@ impl App {
                 .show(ui, |ui| {
                     ui.colored_label(
                         WARN,
-                        egui::RichText::new("⚠ Controller in Switch mode: not supported in the browser").strong(),
+                        egui::RichText::new("⚠ Controller in Switch (S) mode").strong(),
                     );
-                    ui.label(
-                        "This looks like an 8BitDo 64 with its switch on S (or Nintendo's Switch Online N64 \
-                         controller). Browsers can't read Switch-mode controllers properly. Move the switch \
-                         on the back to D and reconnect, then press a button. S mode does work in the \
-                         desktop plugin.",
-                    );
+                    ui.label(if cfg!(target_arch = "wasm32") {
+                        "This is an 8BitDo 64 with its switch on S (or Nintendo's Switch Online N64 \
+                         controller). The browser's gamepad layer can't read it, but raw HID can. \
+                         Click below and pick the controller in the browser's prompt (Chrome/Edge)."
+                    } else {
+                        "This is an 8BitDo 64 with its switch on S (or Nintendo's Switch Online N64 \
+                         controller). Reading it as raw HID gives the most reliable mapping on every OS."
+                    });
+                    ui.horizontal(|ui| {
+                        let label = if hid_dev.is_some() {
+                            "🔌 Use the HID device"
+                        } else if cfg!(target_arch = "wasm32") {
+                            "🔌 Connect via HID…"
+                        } else {
+                            "🔌 Use HID (waiting for device…)"
+                        };
+                        if ui.button(label).clicked() {
+                            use_hid = true;
+                        }
+                        ui.weak("…or move the switch to D.");
+                    });
                 });
         }
         if snap.devices.is_empty() && cfg!(target_arch = "wasm32") {
@@ -423,13 +473,9 @@ impl App {
                     pak_combo(ui, "alt_pak", &mut c.alt_pak);
                     ui.end_row();
                     ui.label("Swap hotkey");
-                    let active = snap.any_pressed(&c.pak_switch, dev);
-                    if bind_cell(
-                        ui,
-                        &mut c.pak_switch,
-                        cap == Some(Target::PakSwitch),
-                        active,
-                    ) {
+                    if bind_cell(ui, &mut c.pak_switch, cap == Some(Target::PakSwitch), |i| {
+                        snap.value(i, dev) > 0.5
+                    }) {
                         want_capture = Some(Target::PakSwitch);
                     }
                     ui.end_row();
@@ -484,6 +530,35 @@ impl App {
             }
             let presets = &self.controller_presets;
             let suggested = dev.and_then(|d| crate::presets::suggested_preset(presets, d));
+            let family = dev
+                .map(|d| crate::presets::family_of(presets, d))
+                .unwrap_or_default();
+            if let Some(cur) = suggested.filter(|_| !family.is_empty()) {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("{} mode:", cur.family)).strong());
+                    let mut modes: Vec<&str> = family.iter().map(|p| p.mode.as_str()).collect();
+                    modes.sort();
+                    modes.dedup();
+                    for m in modes {
+                        let on = m == cur.mode;
+                        if ui.selectable_label(on, format!("  {m}  ")).clicked() {
+                            if on {
+                                cur.apply(c);
+                                self.mode_hint = None;
+                            } else {
+                                self.mode_hint = Some(format!(
+                                    "Move the switch on the back of the controller to {m}, then press a button. \
+                                     The detected mode and its preset follow automatically."
+                                ));
+                            }
+                        }
+                    }
+                    ui.weak(format!("detected: {} ({})", cur.mode, cur.name));
+                });
+                if let Some(h) = &self.mode_hint {
+                    ui.colored_label(ACCENT, h);
+                }
+            }
             ui.horizontal_wrapped(|ui| {
                 if let Some(p) = suggested {
                     if ui
@@ -499,7 +574,12 @@ impl App {
                         ui.weak("No presets for this platform.");
                     }
                     for p in presets {
-                        if ui.button(&p.name).on_hover_text(&p.note).clicked() {
+                        let label = if p.mode.is_empty() {
+                            p.name.clone()
+                        } else {
+                            format!("[{}] {}", p.mode, p.name)
+                        };
+                        if ui.button(label).on_hover_text(&p.note).clicked() {
                             p.apply(c);
                             ui.close();
                         }
@@ -553,7 +633,9 @@ impl App {
                                 .color(if active { LIVE } else { Color32::GRAY })
                                 .strong(),
                         );
-                        if bind_cell(ui, list, cap == Some(Target::Button(b)), active) {
+                        if bind_cell(ui, list, cap == Some(Target::Button(b)), |i| {
+                            snap.value(i, dev) > 0.5
+                        }) {
                             want_capture = Some(Target::Button(b));
                         }
                         ui.end_row();
@@ -583,7 +665,9 @@ impl App {
                                 .color(if v > 0.1 { LIVE } else { Color32::GRAY })
                                 .strong(),
                         );
-                        if bind_cell(ui, list, cap == Some(Target::Stick(d)), v > 0.5) {
+                        if bind_cell(ui, list, cap == Some(Target::Stick(d)), |i| {
+                            snap.value(i, dev) > 0.5
+                        }) {
                             want_capture = Some(Target::Stick(d));
                         }
                         ui.end_row();
@@ -607,7 +691,9 @@ impl App {
                         }));
                         ui.add(egui::Slider::new(&mut m.scale, 0.0..=1.5).text("scale"));
                         ui.checkbox(&mut m.toggle, "toggle");
-                        if bind_cell(ui, &mut m.inputs, cap == Some(Target::Modifier(i)), active) {
+                        if bind_cell(ui, &mut m.inputs, cap == Some(Target::Modifier(i)), |x| {
+                            snap.value(x, dev) > 0.5
+                        }) {
                             want_capture = Some(Target::Modifier(i));
                         }
                         if ui.small_button("🗑").clicked() {
@@ -721,12 +807,11 @@ impl App {
                 );
                 ui.horizontal(|ui| {
                     ui.label("Trigger (all held)");
-                    let active = snap.all_pressed(&m.trigger, dev);
                     if bind_cell(
                         ui,
                         &mut m.trigger,
                         cap == Some(Target::MacroTrigger(sel)),
-                        active,
+                        |i| snap.value(i, dev) > 0.5,
                     ) {
                         want_capture = Some(Target::MacroTrigger(sel));
                     }
@@ -777,6 +862,11 @@ impl App {
         }
         if let Some(t) = want_capture {
             self.start_capture(port, t);
+        }
+        if use_hid {
+            #[cfg(target_arch = "wasm32")]
+            crate::input::web_hid::request();
+            self.hid_assign = Some(port);
         }
         if start_wizard {
             self.wizard_log.clear();
@@ -1160,14 +1250,20 @@ fn pak_combo(ui: &mut Ui, id: &str, v: &mut PakType) {
 }
 
 /// Binding chips + bind button. Returns true when the user wants to capture a new input.
-fn bind_cell(ui: &mut Ui, list: &mut Vec<Input>, capturing: bool, active: bool) -> bool {
+/// Binding chips + bind button. Each chip lights up only while *its* input is active.
+fn bind_cell(
+    ui: &mut Ui,
+    list: &mut Vec<Input>,
+    capturing: bool,
+    active: impl Fn(&Input) -> bool,
+) -> bool {
     let mut want = false;
     ui.horizontal_wrapped(|ui| {
         let mut remove = None;
         for (i, inp) in list.iter().enumerate() {
             let chip = egui::Button::new(format!("{}  ✕", inp.label()))
                 .small()
-                .fill(if active {
+                .fill(if active(inp) {
                     Color32::from_rgb(40, 80, 50)
                 } else {
                     ui.visuals().widgets.inactive.bg_fill

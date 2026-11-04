@@ -299,6 +299,9 @@ pub struct Config {
     pub pak_per_game: bool,
     /// User-saved macro presets (stored without trigger bindings).
     pub macro_presets: Vec<Macro>,
+    /// Raw HID devices ("vvvv:pppp") to read directly (desktop). Default: Switch-protocol N64
+    /// pads (8BitDo 64 in S mode / Nintendo Switch Online N64).
+    pub hid_devices: Vec<String>,
 }
 
 impl Default for Config {
@@ -310,6 +313,7 @@ impl Default for Config {
             background_input: false,
             pak_per_game: true,
             macro_presets: vec![],
+            hid_devices: vec!["057e:2019".into()],
         }
     }
 }
