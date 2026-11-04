@@ -307,4 +307,281 @@ mod tests {
                 .all(|m| m.trigger.is_empty() && !m.steps.is_empty())
         );
     }
+
+    // ---- Replays of real captures (macOS, gilrs) -------------------------------------
+    // Each case is the input state seen while one physical control was held, and the N64
+    // output it must produce: the expected button, or the stick direction (sign of x/y).
+
+    use crate::config::ControllerConfig;
+    use crate::input::{PadAxis, PadButton, Snapshot};
+    use crate::runtime::evaluate_with;
+
+    enum Ev {
+        Btn(PadButton),
+        Axis(PadAxis, f32),
+        RawAxis(u32, f32),
+        RawBtn(u32),
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum Out {
+        Button(N64Button),
+        Stick(i8, i8), // signs
+        Nothing,
+    }
+
+    fn run(preset: &ControllerPreset, name: &str, vid: u16, pid: u16, evs: &[Ev]) -> (u16, i8, i8) {
+        let mut c = ControllerConfig::defaults(0, true);
+        preset.apply(&mut c);
+        let mut d = DeviceState {
+            name: name.into(),
+            vendor: Some(vid),
+            product: Some(pid),
+            ..Default::default()
+        };
+        for e in evs {
+            match e {
+                Ev::Btn(b) => d.buttons[*b as usize] = 1.0,
+                Ev::Axis(a, v) => d.axes[*a as usize] = *v,
+                Ev::RawAxis(code, v) => d.raw_axes.push((*code, *v)),
+                Ev::RawBtn(code) => d.raw_buttons.push((*code, 1.0)),
+            }
+        }
+        let snap = Snapshot {
+            devices: vec![d.clone()],
+            ..Default::default()
+        };
+        let (st, _) = evaluate_with(&c, &snap, Some(&d), 1.0);
+        (st.buttons, st.x.signum(), st.y.signum())
+    }
+
+    fn check(
+        preset_name: &str,
+        dev_name: &str,
+        vid: u16,
+        pid: u16,
+        cases: Vec<(&str, Vec<Ev>, Out)>,
+    ) {
+        let all = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
+        let preset = all
+            .iter()
+            .find(|p| p.name == preset_name)
+            .expect(preset_name);
+        let dev = DeviceState {
+            name: dev_name.into(),
+            vendor: Some(vid),
+            product: Some(pid),
+            ..Default::default()
+        };
+        assert!(
+            preset.matches(&dev),
+            "{preset_name} doesn't match {dev_name}"
+        );
+        for (label, evs, want) in cases {
+            let (buttons, x, y) = run(preset, dev_name, vid, pid, &evs);
+            let got = if buttons != 0 {
+                let pressed: Vec<_> = N64Button::ALL
+                    .into_iter()
+                    .filter(|b| buttons & b.mask() != 0)
+                    .collect();
+                assert_eq!(pressed.len(), 1, "{label}: several N64 buttons {pressed:?}");
+                Out::Button(pressed[0])
+            } else if x != 0 || y != 0 {
+                Out::Stick(x, y)
+            } else {
+                Out::Nothing
+            };
+            assert_eq!(got, want, "{preset_name}: {label}");
+        }
+    }
+
+    #[test]
+    fn eightbitdo_d_mode_capture() {
+        use Ev::*;
+        use N64Button as N;
+        use PadAxis as X;
+        use PadButton as P;
+        check(
+            "8BitDo 64 — D mode",
+            "8BitDo 64",
+            0x2dc8,
+            0x3019,
+            vec![
+                ("A", vec![Btn(P::South)], Out::Button(N::A)),
+                ("B", vec![Btn(P::East)], Out::Button(N::B)),
+                (
+                    "Z left",
+                    vec![Btn(P::LeftTrigger), RawAxis(131269, 1.0)],
+                    Out::Button(N::Z),
+                ),
+                (
+                    "Z right",
+                    vec![Btn(P::RightTrigger), RawAxis(131268, 1.0)],
+                    Out::Button(N::Z),
+                ),
+                ("Start", vec![Btn(P::Start)], Out::Button(N::Start)),
+                ("L", vec![Btn(P::LeftShoulder)], Out::Button(N::L)),
+                ("R", vec![Btn(P::RightShoulder)], Out::Button(N::R)),
+                ("D up", vec![Axis(X::DPadY, 1.0)], Out::Button(N::DUp)),
+                ("D right", vec![Axis(X::DPadX, 1.0)], Out::Button(N::DRight)),
+                ("D down", vec![Axis(X::DPadY, -1.0)], Out::Button(N::DDown)),
+                ("D left", vec![Axis(X::DPadX, -1.0)], Out::Button(N::DLeft)),
+                (
+                    "C up",
+                    vec![Axis(X::RightStickY, 0.992)],
+                    Out::Button(N::CUp),
+                ),
+                (
+                    "C right",
+                    vec![Axis(X::RightStickX, 1.0)],
+                    Out::Button(N::CRight),
+                ),
+                (
+                    "C down",
+                    vec![Axis(X::RightStickY, -1.0)],
+                    Out::Button(N::CDown),
+                ),
+                (
+                    "C left",
+                    vec![Axis(X::RightStickX, -0.992)],
+                    Out::Button(N::CLeft),
+                ),
+                (
+                    "stick up",
+                    vec![Axis(X::LeftStickY, 0.992)],
+                    Out::Stick(0, 1),
+                ),
+                (
+                    "stick right",
+                    vec![Axis(X::LeftStickX, 1.0)],
+                    Out::Stick(1, 0),
+                ),
+                (
+                    "stick down",
+                    vec![Axis(X::LeftStickY, -1.0)],
+                    Out::Stick(0, -1),
+                ),
+                (
+                    "stick left",
+                    vec![Axis(X::LeftStickX, -0.992)],
+                    Out::Stick(-1, 0),
+                ),
+                ("Home", vec![Btn(P::Mode)], Out::Nothing),
+                (
+                    "Star (labelled DPadLeft)",
+                    vec![Btn(P::DPadLeft)],
+                    Out::Nothing,
+                ),
+                ("Dash", vec![Btn(P::Select)], Out::Nothing),
+                ("stick click", vec![Btn(P::LeftThumb)], Out::Nothing),
+            ],
+        );
+    }
+
+    #[test]
+    fn eightbitdo_s_mode_macos_capture() {
+        use Ev::*;
+        use N64Button as N;
+        use PadAxis as X;
+        use PadButton as P;
+        // C buttons: the mapping DB reports every one as a *positive* right-stick move,
+        // alongside its own raw code. Both are present in the device state.
+        check(
+            "8BitDo 64 — S mode (macOS)",
+            "NSO N64 Controller",
+            0x057e,
+            0x2019,
+            vec![
+                ("A", vec![Btn(P::South)], Out::Button(N::A)),
+                ("B", vec![Btn(P::East)], Out::Button(N::B)),
+                ("Z left", vec![Btn(P::LeftTrigger)], Out::Button(N::Z)),
+                ("Z right", vec![Btn(P::RightTrigger)], Out::Button(N::Z)),
+                ("Start", vec![Btn(P::Start)], Out::Button(N::Start)),
+                ("L", vec![Btn(P::LeftShoulder)], Out::Button(N::L)),
+                ("R", vec![Btn(P::RightShoulder)], Out::Button(N::R)),
+                ("D up", vec![Axis(X::DPadY, 1.0)], Out::Button(N::DUp)),
+                ("D right", vec![Axis(X::DPadX, 1.0)], Out::Button(N::DRight)),
+                ("D down", vec![Axis(X::DPadY, -1.0)], Out::Button(N::DDown)),
+                ("D left", vec![Axis(X::DPadX, -1.0)], Out::Button(N::DLeft)),
+                (
+                    "C up",
+                    vec![Axis(X::RightStickY, 1.0), RawAxis(589827, 1.0)],
+                    Out::Button(N::CUp),
+                ),
+                (
+                    "C right",
+                    vec![Axis(X::RightStickX, 1.0), RawAxis(589833, 1.0)],
+                    Out::Button(N::CRight),
+                ),
+                (
+                    "C down",
+                    vec![Axis(X::RightStickY, 1.0), RawAxis(589832, 1.0)],
+                    Out::Button(N::CDown),
+                ),
+                (
+                    "C left",
+                    vec![Axis(X::RightStickX, 1.0), RawAxis(589828, 1.0)],
+                    Out::Button(N::CLeft),
+                ),
+                ("stick up", vec![Axis(X::LeftStickY, 1.0)], Out::Stick(0, 1)),
+                (
+                    "stick right",
+                    vec![Axis(X::LeftStickX, 1.0)],
+                    Out::Stick(1, 0),
+                ),
+                (
+                    "stick down",
+                    vec![Axis(X::LeftStickY, -1.0)],
+                    Out::Stick(0, -1),
+                ),
+                (
+                    "stick left",
+                    vec![Axis(X::LeftStickX, -1.0)],
+                    Out::Stick(-1, 0),
+                ),
+                ("Home", vec![Btn(P::Mode)], Out::Nothing),
+                ("Star", vec![RawBtn(589838)], Out::Nothing),
+            ],
+        );
+    }
+
+    #[test]
+    fn modes_pick_their_own_preset() {
+        let all = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
+        let mac: Vec<_> = all
+            .iter()
+            .filter(|p| p.platforms.is_empty() || p.platforms.iter().any(|x| x == "macos"))
+            .cloned()
+            .collect();
+        let web: Vec<_> = all
+            .iter()
+            .filter(|p| p.platforms.is_empty() || p.platforms.iter().any(|x| x == "web"))
+            .cloned()
+            .collect();
+        let d = |n: &str, v, p| DeviceState {
+            name: n.into(),
+            vendor: Some(v),
+            product: Some(p),
+            ..Default::default()
+        };
+        let name = |list: &[ControllerPreset], dev: &DeviceState| {
+            suggested_preset(list, dev).map(|p| p.name.clone())
+        };
+        assert_eq!(
+            name(&mac, &d("8BitDo 64", 0x2dc8, 0x3019)).as_deref(),
+            Some("8BitDo 64 — D mode")
+        );
+        assert_eq!(
+            name(&mac, &d("NSO N64 Controller", 0x057e, 0x2019)).as_deref(),
+            Some("8BitDo 64 — S mode (macOS)")
+        );
+        let browser_s = DeviceState {
+            name: "N64 Controller (Vendor: 057e Product: 2019)".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            name(&web, &browser_s).as_deref(),
+            Some("8BitDo 64 — S mode (browser, partial)")
+        );
+    }
 }

@@ -436,7 +436,7 @@ impl App {
                 });
                 if ui
                     .button("🧭 Guided setup")
-                    .on_hover_text("Press each N64 button on your controller when asked. Works with any adapter (Adaptoid, 8BitDo, Raphnet, …). Keyboard keys are kept.")
+                    .on_hover_text("Press each N64 button on your controller when asked. Works with any controller or adapter. Keyboard keys are kept.")
                     .clicked()
                 {
                     start_wizard = true;
@@ -456,15 +456,6 @@ impl App {
             });
             if let Some(e) = &self.presets_error {
                 ui.colored_label(Color32::RED, format!("Preset file error: {e}"));
-            }
-            if suggested.is_none() {
-                if let Some(d) = dev {
-                    if d.name.to_lowercase().contains("adaptoid") {
-                        ui.weak(
-                            "Adaptoid detected: no preset yet. Use Guided setup, then export it.",
-                        );
-                    }
-                }
             }
             if !cfg!(target_arch = "wasm32") && self.json.starts_with("- name:") {
                 ui.label("Exported preset (also on your clipboard):");
@@ -1700,7 +1691,7 @@ mod web_debug {
                 );
                 return;
             }
-            ui.weak("Shows the bytes a HID device sends, before any mapping. Useful for adapters and controllers without a mapping (Adaptoid, 8BitDo in D-input mode, …). Bytes that differ from the previous frame are highlighted.");
+            ui.weak("Shows the bytes a HID device sends, before any mapping. Useful for adapters and controllers without a mapping. Bytes that differ from the previous frame are highlighted.");
             if ui.button("🔌 Connect HID device…").clicked() {
                 let _ = hid_connect();
             }

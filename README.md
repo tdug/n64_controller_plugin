@@ -10,7 +10,7 @@ An N64 controller plugin written in Rust. One library works with **Project64** (
 - **Bindings**: each N64 button and stick direction accepts several inputs. Analog axes, triggers and buttons can all be bound to anything.
 - **Quick setup** (presets live in [`presets/controllers.yml`](presets/controllers.yml))
   - Controller presets: the 8BitDo 64 in D mode ("8BitDo 64 BT") and S mode ("N64 Controller", which also fits Nintendo's Switch Online N64 pad). When one of these is the selected gamepad, the UI offers a one-click button to apply its preset.
-  - **Guided setup**: press each N64 button when prompted. It works with any adapter that has no built-in mapping (Adaptoid, Raphnet, unmapped modes), and it keeps your keyboard keys.
+  - **Guided setup**: press each N64 button when prompted. It works with any controller or adapter that has no preset, and it keeps your keyboard keys.
   - **Export bindings as YAML preset**: turns your current bindings into a preset entry for the file.
   - The file is compiled into the plugin and the web page. On desktop, *Settings → Open presets file* copies it to your data folder, where your edits take effect without a rebuild.
 - **Analog stick**
