@@ -50,6 +50,9 @@ Create or fix a controller preset from real input data. Never guess button codes
    - Fill in all 14 buttons and the 4 stick directions.
    - Preset input format and the file's own header comments are the reference.
 6. **Verify:** run `cargo test presets` in the repo root.
-7. **Browser-specific mappings** come from the web build's Debug tab, not this tool. The browser
+7. **Raw HID**: when the OS mapping is broken (Switch-protocol pads such as the 8BitDo 64 in S
+   mode), capture with `tools/hid-listen` instead and write `hid_bit` / `hid_hat` / `hid_axis`
+   bindings. See `tools/hid-listen/README.md`.
+8. **Browser-specific mappings** come from the web build's Debug tab, not this tool. The browser
    numbers buttons and axes differently from gilrs on desktop, and reports a D-pad as a hat axis
    (`raw_hat`). Ask the user to read those values off the Debug tab.

@@ -21,6 +21,7 @@ wasm for the browser. User-facing docs are in `README.md`.
 - `src/gui.rs`: egui app shared by desktop and web. The web-only Debug tab is in `mod web_debug`.
 - `tools/gamepad-listen/`: standalone crate that logs controller events. It is not part of the
   root build; see its `AGENTS.md`.
+- `tools/hid-listen/`: standalone raw HID report listener, for Switch-mode pads.
 - `skills/`: agent skills in SKILL.md format. `.claude/skills/` holds symlinks to them.
 
 ## Commands

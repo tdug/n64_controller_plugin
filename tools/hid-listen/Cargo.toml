@@ -1,0 +1,14 @@
+[package]
+name = "hid-listen"
+version = "0.1.0"
+edition = "2024"
+description = "Raw HID report listener (with optional Nintendo Switch full-mode handshake), for mapping Switch-mode controllers"
+license = "MIT"
+publish = false
+
+# Standalone: not part of the plugin's build.
+[workspace]
+
+[dependencies]
+async-hid = "0.5"
+futures-lite = "2"
