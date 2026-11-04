@@ -70,6 +70,39 @@ presets:
       left:  [{type: axis, axis: LeftStickX, positive: false}]
       right: [{type: axis, axis: LeftStickX, positive: true}]
 
+  - name: "8BitDo 64 — D mode (browser)"
+    family: "8BitDo 64"
+    mode: D
+    note: >-
+      Captured in Chrome on macOS with guided setup (reports as "8BitDo 64 BT", 2dc8:3019, no
+      standard mapping: 18 buttons, 10 axes). Both back triggers are Z (browser buttons 8 and 9),
+      Start is button 11. C-Left/Right are browser axis 2, C-Up/Down are axis 5 (raw code 54,
+      up = negative). The D-pad is a hat on axis 9 (raw code 58) that rests at 3.286.
+    names: [["8bitdo", "64"]]
+    ids: ["2dc8:3019"]
+    platforms: [web]
+    deadzone: 0.05
+    buttons:
+      A:      [{type: button, button: South}]
+      B:      [{type: button, button: East}]
+      Z:      [{type: button, button: Select}, {type: button, button: Start}]
+      Start:  [{type: button, button: RightThumb}]
+      L:      [{type: button, button: LeftTrigger}]
+      R:      [{type: button, button: RightTrigger}]
+      DUp:    [{type: raw_hat, code: 58, dir: 0}]
+      DRight: [{type: raw_hat, code: 58, dir: 1}]
+      DDown:  [{type: raw_hat, code: 58, dir: 2}]
+      DLeft:  [{type: raw_hat, code: 58, dir: 3}]
+      CUp:    [{type: raw_axis, code: 54, positive: false}]
+      CDown:  [{type: raw_axis, code: 54, positive: true}]
+      CLeft:  [{type: axis, axis: RightStickX, positive: false}]
+      CRight: [{type: axis, axis: RightStickX, positive: true}]
+    stick:
+      up:    [{type: axis, axis: LeftStickY, positive: true}]
+      down:  [{type: axis, axis: LeftStickY, positive: false}]
+      left:  [{type: axis, axis: LeftStickX, positive: false}]
+      right: [{type: axis, axis: LeftStickX, positive: true}]
+
   - name: "8BitDo 64 — S mode (macOS)"
     family: "8BitDo 64"
     mode: S

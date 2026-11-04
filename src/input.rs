@@ -907,6 +907,8 @@ impl InputManager {
                 .map(|(c, b)| (c.into_u32(), b.value()))
                 .collect();
             d.raw_axes = st.axes().map(|(c, a)| (c.into_u32(), a.value())).collect();
+            #[cfg(target_arch = "wasm32")]
+            web_hid::merge_browser_raw(&mut d);
             snap.devices.push(d);
         }
         snap.devices.sort_by_key(|d| d.id);
@@ -986,6 +988,41 @@ pub mod web_hid {
         fn hid_json() -> Result<String, JsValue>;
         #[wasm_bindgen(catch, js_name = tdugHidConnect)]
         fn hid_connect() -> Result<JsValue, JsValue>;
+        #[wasm_bindgen(catch, js_name = tdugPadsJson)]
+        fn pads_json() -> Result<String, JsValue>;
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Pad {
+        id: String,
+        buttons: Vec<f32>,
+        axes: Vec<f32>,
+    }
+
+    /// gilrs (wasm) only learns a raw axis after it changes, and clamps it to ±1. Overwrite raw
+    /// axes/buttons with the browser's own values (all indices, unclamped, including resting
+    /// state) so hats like "released = 3.286" are recognised. Codes follow gilrs' numbering:
+    /// axis i >= 4 → i + button count + 31, button i >= 17 → i + 31.
+    pub fn merge_browser_raw(d: &mut super::DeviceState) {
+        let pads: Vec<Pad> =
+            serde_json::from_str(&pads_json().unwrap_or_default()).unwrap_or_default();
+        let Some(p) = pads.iter().find(|p| p.id == d.name) else {
+            return;
+        };
+        let nb = p.buttons.len();
+        let set = |list: &mut Vec<(u32, f32)>, code: u32, v: f32| match list
+            .iter_mut()
+            .find(|(c, _)| *c == code)
+        {
+            Some(e) => e.1 = v,
+            None => list.push((code, v)),
+        };
+        for (i, v) in p.axes.iter().enumerate().skip(4) {
+            set(&mut d.raw_axes, (i + nb + 31) as u32, *v);
+        }
+        for (i, v) in p.buttons.iter().enumerate().skip(17) {
+            set(&mut d.raw_buttons, (i + 31) as u32, *v);
+        }
     }
 
     #[derive(serde::Deserialize)]

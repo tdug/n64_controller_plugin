@@ -856,4 +856,50 @@ mod tests {
         );
         assert_eq!(Input::button(PadButton::South).opposite(), None);
     }
+
+    #[test]
+    fn eightbitdo_d_mode_browser() {
+        use crate::input::{PadAxis, PadButton};
+        use N64Button as N;
+        let all = parse_controller_presets(BUILTIN_CONTROLLERS_YAML).unwrap();
+        let web: Vec<_> = all
+            .iter()
+            .filter(|p| p.platforms.iter().any(|x| x == "web") || p.platforms.is_empty())
+            .cloned()
+            .collect();
+        let mut d = DeviceState {
+            name: "8BitDo 64 BT (Vendor: 2dc8 Product: 3019)".into(),
+            ..Default::default()
+        };
+        let p = suggested_preset(&web, &d).expect("web D preset");
+        assert_eq!(p.name, "8BitDo 64 — D mode (browser)");
+        let mut c = ControllerConfig::defaults(0, false);
+        p.apply(&mut c);
+        // Resting state as the browser reports it: hat axis 9 (code 58) at 3.286, axis 5 at 0.
+        d.raw_axes = vec![(54, -0.004), (58, 3.2857)];
+        d.axes[PadAxis::RightStickY as usize] = -1.0; // browser axis 3 rests at -1
+        let eval = |d: &DeviceState| {
+            let snap = Snapshot {
+                devices: vec![d.clone()],
+                ..Default::default()
+            };
+            evaluate_with(&c, &snap, Some(d), 1.0).0.buttons
+        };
+        assert_eq!(eval(&d), 0, "nothing pressed at rest");
+        let hat = |v: f32| {
+            let mut x = d.clone();
+            x.raw_axes[1].1 = v;
+            eval(&x)
+        };
+        assert_eq!(hat(-1.0), N::DUp.mask());
+        assert_eq!(hat(-0.4286), N::DRight.mask());
+        assert_eq!(hat(0.1429), N::DDown.mask());
+        assert_eq!(hat(0.7143), N::DLeft.mask());
+        let mut x = d.clone();
+        x.raw_axes[0].1 = -1.0;
+        assert_eq!(eval(&x), N::CUp.mask());
+        let mut x = d.clone();
+        x.buttons[PadButton::Select as usize] = 1.0;
+        assert_eq!(eval(&x), N::Z.mask());
+    }
 }
