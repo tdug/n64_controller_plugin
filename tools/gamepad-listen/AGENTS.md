@@ -15,6 +15,11 @@ Use the log to write or fix entries in `../../presets/controllers.yml`.
   runs until killed, so stop it with `pkill -f gamepad-listen` when finished.
 - The user has to press the buttons. Ask for **one control per message**, then confirm it in the
   log tail before asking for the next.
+- If your harness can stream a background process's output (for example Claude Code's Monitor
+  tool), run `tail -f <log> | grep --line-buffered -E "PRESS|CONNECT|AXIS .* v=[+-](0\.9|1\.0)"`.
+  Each press then reaches you as an event, so you can prompt for the next control without
+  waiting for the user to reply.
+- Without an agent, users can run `--guided`, which prompts them itself and prints a YAML preset.
 - An empty log usually means the controller is asleep. Ask the user to press a button to wake it.
   Don't assume the tool is broken.
 

@@ -17,6 +17,12 @@ Create or fix a controller preset from real input data. Never guess button codes
    ```sh
    tools/gamepad-listen/target/release/gamepad-listen > <scratchpad>/listen.log 2>&1
    ```
+   If your harness can stream background output (for example Claude Code's Monitor tool), watch
+   the log with
+   `tail -n 0 -f <log> | grep --line-buffered -E "PRESS|CONNECT|AXIS .* v=[+-](0\.9|1\.0)"`.
+   Each press arrives as an event and you prompt for the next control straight away.
+   Alternative with no agent: the user runs `cargo run --release -- --guided` in
+   `tools/gamepad-listen`, which prompts for each control itself and prints a YAML preset.
 3. **Ask the user for one control at a time.** Send a single message naming one control, wait for
    them to reply, check the log tail (`tail -5 <scratchpad>/listen.log`) to confirm the event
    arrived, record the code, then ask for the next. This keeps every log line tied to a known
@@ -27,6 +33,11 @@ Create or fix a controller preset from real input data. Never guess button codes
    4. C Up, Right, Down, Left.
    5. Stick fully Up, Right, Down, Left, releasing each time.
    6. Any extra buttons, which the user names.
+
+   Gotchas seen in practice: controllers can have two physical buttons for one N64 control (the
+   8BitDo 64 has two Z triggers, so ask for both). A D-pad can report as axes (`DPadX`/`DPadY`)
+   instead of buttons. Mapping databases can mislabel extra buttons (the 8BitDo's Star reports as
+   `DPadLeft`), so ask what every unexpected event was before binding it.
 
    If the controller has mode switches (for example 8BitDo 64 S/D), do one capture per mode and
    ask the user which mode it's in.

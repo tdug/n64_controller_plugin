@@ -17,6 +17,17 @@ cargo run --release | tee listen.log
 
 Then press each control on the controller, one at a time.
 
+### Guided mode
+
+```sh
+cargo run --release -- --guided
+```
+
+Guided mode asks for each N64 control in turn (A, B, Z, …, stick directions) and waits up to 10 s
+for each; a control you don't press is skipped. At the end it prints a ready-to-paste YAML preset
+entry on stdout; the prompts go to stderr. Each control gets one input; add extra inputs by hand
+(for example a second Z trigger).
+
 ## Output
 
 At startup, one line per connected pad:
