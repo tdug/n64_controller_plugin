@@ -412,6 +412,13 @@ mod tests {
     use crate::input::Input;
     use crate::n64::N64Button;
 
+    /// Config with the optional keyboard layout on port 1 (not the default).
+    fn kb_config() -> Config {
+        let mut c = Config::default();
+        c.controllers[0] = ControllerConfig::defaults(0, true);
+        c
+    }
+
     fn snap_with_key(k: u8, down: bool) -> Snapshot {
         let mut s = Snapshot::default();
         s.keys[k as usize] = down;
@@ -419,8 +426,24 @@ mod tests {
     }
 
     #[test]
+    fn default_has_no_keyboard_binds() {
+        let c = Config::default();
+        let has_key = |l: &Vec<Input>| l.iter().any(|i| matches!(i, Input::Key { .. }));
+        for cc in &c.controllers {
+            assert!(!cc.buttons.values().any(has_key));
+            let sb = &cc.stick_bindings;
+            assert!(
+                ![&sb.up, &sb.down, &sb.left, &sb.right]
+                    .into_iter()
+                    .any(has_key)
+            );
+            assert!(cc.modifiers.is_empty());
+        }
+    }
+
+    #[test]
     fn keyboard_a_button() {
-        let mut rt = Runtime::new(Config::default(), true);
+        let mut rt = Runtime::new(kb_config(), true);
         let st = rt.poll(0, &snap_with_key(b'X', true));
         assert!(st.pressed(N64Button::A));
     }
@@ -512,7 +535,7 @@ mod tests {
 
     #[test]
     fn modifier_scales_stick() {
-        let mut rt = Runtime::new(Config::default(), true);
+        let mut rt = Runtime::new(kb_config(), true);
         let mut s = snap_with_key(0x27, true);
         assert_eq!(rt.poll(0, &s).x, 85);
         s.keys[0xA0] = true;

@@ -305,7 +305,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             controllers: (0..PORTS)
-                .map(|i| ControllerConfig::defaults(i, i == 0))
+                .map(|i| ControllerConfig::defaults(i, false))
                 .collect(),
             background_input: false,
             pak_per_game: true,
