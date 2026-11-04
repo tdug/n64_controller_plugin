@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+      - run: cargo test --all-targets
+      - run: cargo clippy --all-targets
+
+  windows:
+    name: windows-${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86   # Project64 3.x / 1964 / most legacy emulators are 32-bit
+            target: i686-pc-windows-msvc
+          - arch: x64   # Project64 4.x 64-bit, 64-bit Mupen64Plus
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Check exports
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem "C:\Program Files\Microsoft Visual Studio" -Recurse -Filter dumpbin.exe | Where-Object { $_.FullName -match "Hostx64\\x64" } | Select-Object -First 1
+          $out = & $dumpbin.FullName /exports target/${{ matrix.target }}/release/tdug_plugin.dll | Out-String
+          Write-Output $out
+          foreach ($sym in "GetDllInfo","InitiateControllers","GetKeys","ReadController","ControllerCommand","RomOpen","RomClosed","CloseDLL","DllConfig","PluginStartup","PluginGetVersion","ConfigMain") {
+            if ($out -notmatch "\b$sym\b") { throw "missing export $sym" }
+          }
+      - name: Stage
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/tdug_plugin.dll dist/TDug_N64_Input.dll
+          cp target/${{ matrix.target }}/release/tdug-n64-config.exe dist/
+          cp README.md dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tdug-n64-input-windows-${{ matrix.arch }}
+          path: dist/
+
+  unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-x64
+            os: ubuntu-latest
+            lib: libtdug_plugin.so
+            out: mupen64plus-input-tdug.so
+          - name: macos-arm64
+            os: macos-latest
+            lib: libtdug_plugin.dylib
+            out: mupen64plus-input-tdug.dylib
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+      - run: cargo build --release
+      - run: |
+          mkdir -p dist
+          cp target/release/${{ matrix.lib }} dist/${{ matrix.out }}
+          cp target/release/tdug-n64-config dist/
+          cp README.md dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tdug-n64-input-${{ matrix.name }}
+          path: dist/
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install trunk
+        run: |
+          curl -sSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+      - run: trunk build --release --public-url ./
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tdug-n64-input-web
+          path: dist/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+
+  pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: web
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, windows, unix, web]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - run: |
+          cd artifacts
+          for d in */; do (cd "$d" && zip -r "../${d%/}.zip" .); done
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" artifacts/*.zip --repo "${{ github.repository }}" --generate-notes
