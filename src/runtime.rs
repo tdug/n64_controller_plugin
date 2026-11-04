@@ -37,10 +37,13 @@ struct MacroPlayer {
     step: usize,
     frame: u32,
     prev_trigger: bool,
+    /// Just (re)started: current step not yet shown.
+    fresh: bool,
 }
 
 impl MacroPlayer {
-    fn update(&mut self, m: &Macro, pressed: bool, state: &mut N64State) {
+    /// `advance`: a new game frame started, so move to the next macro frame.
+    fn update(&mut self, m: &Macro, pressed: bool, state: &mut N64State, advance: bool) {
         let edge = pressed && !self.prev_trigger;
         self.prev_trigger = pressed;
         match m.playback {
@@ -71,6 +74,29 @@ impl MacroPlayer {
             self.active = false;
             return;
         }
+        if !advance && !self.fresh {
+            self.apply(m, state);
+            return;
+        }
+        if !self.fresh {
+            self.frame += 1;
+            if self.frame >= m.steps[self.step.min(m.steps.len() - 1)].frames.max(1) {
+                self.frame = 0;
+                self.step += 1;
+                if self.step >= m.steps.len() {
+                    self.step = 0;
+                    if m.playback == Playback::Once {
+                        self.active = false;
+                        return;
+                    }
+                }
+            }
+        }
+        self.fresh = false;
+        self.apply(m, state);
+    }
+
+    fn apply(&self, m: &Macro, state: &mut N64State) {
         let step = &m.steps[self.step.min(m.steps.len() - 1)];
         match m.mode {
             MacroMode::Merge => {
@@ -89,23 +115,13 @@ impl MacroPlayer {
                 };
             }
         }
-        self.frame += 1;
-        if self.frame >= step.frames.max(1) {
-            self.frame = 0;
-            self.step += 1;
-            if self.step >= m.steps.len() {
-                self.step = 0;
-                if m.playback == Playback::Once {
-                    self.active = false;
-                }
-            }
-        }
     }
 
     fn restart(&mut self) {
         self.active = true;
         self.step = 0;
         self.frame = 0;
+        self.fresh = true;
     }
 }
 
@@ -120,6 +136,8 @@ struct Port {
     switch_prev: bool,
     rumble: bool,
     last: N64State,
+    /// A new game frame began since this port's last macro advance.
+    frame_ready: bool,
 }
 
 pub struct Runtime {
@@ -130,6 +148,9 @@ pub struct Runtime {
     ports: Vec<Port>,
     /// Pending motor changes `(port, on)` for the input thread.
     pub rumble_events: Vec<(usize, bool)>,
+    /// Whether the host gives us a frame clock (VI ticks or PIF cycle ends).
+    clock_seen: bool,
+    vi_clock: bool,
 }
 
 impl Runtime {
@@ -140,6 +161,8 @@ impl Runtime {
             preview,
             ports: (0..PORTS).map(|_| Port::default()).collect(),
             rumble_events: vec![],
+            clock_seen: false,
+            vi_clock: false,
         };
         rt.sync_ports();
         rt
@@ -236,6 +259,28 @@ impl Runtime {
         }
     }
 
+    /// Frame clock: once per video frame (emulator's `GetKeys` cadence).
+    /// When present, macros advance at most once per VI *and* only when the game polls,
+    /// so they track the game's own frame rate (e.g. 30 fps games poll every other VI).
+    pub fn vi_tick(&mut self) {
+        self.clock_seen = true;
+        self.vi_clock = true;
+        for p in &mut self.ports {
+            p.frame_ready = true;
+        }
+    }
+
+    /// Frame clock fallback: end of one PIF transaction (`ReadController(-1)`).
+    /// Multiple polls of the same port inside one transaction count as one frame.
+    pub fn pif_cycle_end(&mut self) {
+        self.clock_seen = true;
+        if !self.vi_clock {
+            for p in &mut self.ports {
+                p.frame_ready = true;
+            }
+        }
+    }
+
     pub fn last_state(&self, port: usize) -> N64State {
         self.ports[port].last
     }
@@ -263,9 +308,11 @@ impl Runtime {
         }
 
         let (mut state, _) = evaluate_with(cfg, snap, dev, scale);
+        let advance = p.frame_ready || !self.clock_seen;
+        p.frame_ready = false;
         for (m, player) in cfg.macros.iter().zip(p.macros.iter_mut()) {
             let pressed = snap.all_pressed(&m.trigger, dev);
-            player.update(m, pressed, &mut state);
+            player.update(m, pressed, &mut state, advance);
         }
         p.last = state;
 
@@ -440,11 +487,27 @@ mod tests {
         let up = Snapshot::default();
         let a = N64Button::A.mask();
         let b = N64Button::B.mask();
-        assert_eq!(rt.poll(0, &down).buttons, a);
-        assert_eq!(rt.poll(0, &up).buttons, a);
-        let s = rt.poll(0, &up);
+        let mut frame = |rt: &mut Runtime, s: &Snapshot| {
+            rt.vi_tick();
+            let first = rt.poll(0, s);
+            // Extra polls within the same frame must not advance the macro.
+            assert_eq!(rt.poll(0, s), first);
+            first
+        };
+        assert_eq!(frame(&mut rt, &down).buttons, a);
+        assert_eq!(frame(&mut rt, &up).buttons, a);
+        let s = frame(&mut rt, &up);
         assert_eq!((s.buttons, s.x, s.y), (b, 10, -10));
-        assert_eq!(rt.poll(0, &up).buttons, 0);
+        assert_eq!(frame(&mut rt, &up).buttons, 0);
+        // A 30 fps game polls every other VI: VIs without a poll don't consume macro frames.
+        rt.vi_tick();
+        assert_eq!(rt.poll(0, &down).buttons, a);
+        rt.vi_tick();
+        rt.vi_tick();
+        assert_eq!(rt.poll(0, &up).buttons, a);
+        rt.vi_tick();
+        rt.vi_tick();
+        assert_eq!(rt.poll(0, &up).buttons, b);
     }
 
     #[test]

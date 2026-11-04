@@ -29,6 +29,25 @@ struct Capture {
     target: Target,
     base: Snapshot,
     started: Instant,
+    /// Part of guided setup: index into `wizard_steps()`.
+    wizard: Option<usize>,
+}
+
+/// Guided setup order: every N64 button, then the four stick directions.
+fn wizard_steps() -> Vec<Target> {
+    N64Button::ALL
+        .iter()
+        .map(|b| Target::Button(*b))
+        .chain(Dir::ALL.iter().map(|d| Target::Stick(*d)))
+        .collect()
+}
+
+fn target_label(t: Target) -> String {
+    match t {
+        Target::Button(b) => b.label().to_string(),
+        Target::Stick(d) => d.label().to_string(),
+        _ => String::new(),
+    }
 }
 
 struct MacroRec {
@@ -116,14 +135,18 @@ impl App {
 
     fn handle_capture(&mut self) {
         let Some(cap) = &self.capture else { return };
-        if self.snap.keys[0x1B] || cap.started.elapsed() > Duration::from_secs(6) {
+        let limit = if cap.wizard.is_some() { 20 } else { 6 };
+        if self.snap.keys[0x1B] || cap.started.elapsed() > Duration::from_secs(limit) {
+            if cap.wizard.is_some() {
+                self.status = "Guided setup cancelled".into();
+            }
             self.capture = None;
             return;
         }
         let Some((input, dev_id)) = self.snap.detect_new(&cap.base) else {
             return;
         };
-        let (port, target) = (cap.port, cap.target);
+        let (port, target, wizard) = (cap.port, cap.target, cap.wizard);
         self.capture = None;
         let c = &mut self.cfg.controllers[port];
         // Gamepad input from a device other than the assigned one: assign it.
@@ -142,8 +165,26 @@ impl App {
             Target::MacroTrigger(i) => &mut c.macros[i].trigger,
             Target::PakSwitch => &mut c.pak_switch,
         };
+        if wizard.is_some() {
+            // Guided setup replaces gamepad bindings, keeps keyboard keys.
+            list.retain(|i| matches!(i, Input::Key { .. }));
+        }
         if !list.contains(&input) {
             list.push(input);
+        }
+        if let Some(i) = wizard {
+            let steps = wizard_steps();
+            if i + 1 < steps.len() {
+                self.capture = Some(Capture {
+                    port,
+                    target: steps[i + 1],
+                    base: self.snap.clone(),
+                    started: Instant::now(),
+                    wizard: Some(i + 1),
+                });
+            } else {
+                self.status = "Guided setup complete".into();
+            }
         }
     }
 }
@@ -156,6 +197,7 @@ impl eframe::App for App {
             self.preview.set_config(self.cfg.clone());
         }
         let port = self.tab.min(PORTS - 1);
+        self.preview.vi_tick();
         let out = self.preview.poll(port, &self.snap);
         let dev = self
             .snap
@@ -186,8 +228,11 @@ impl eframe::App for App {
                 .show(ui, |ui| {
                     if self.tab < PORTS {
                         self.controller_panel(ui, port, dev.is_some());
-                    } else {
+                    } else if self.tab == PORTS {
                         self.settings_panel(ui);
+                    } else {
+                        #[cfg(target_arch = "wasm32")]
+                        web_debug::panel(ui, &self.snap);
                     }
                 });
         });
@@ -207,6 +252,9 @@ impl App {
                 ui.selectable_value(&mut self.tab, i, label);
             }
             ui.selectable_value(&mut self.tab, PORTS, "⚙ Settings");
+            if cfg!(target_arch = "wasm32") {
+                ui.selectable_value(&mut self.tab, PORTS + 1, "🔬 Debug");
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let dirty = self.cfg != self.saved;
                 if ui
@@ -237,6 +285,7 @@ impl App {
             target,
             base: self.snap.clone(),
             started: Instant::now(),
+            wizard: None,
         });
     }
 
@@ -249,6 +298,12 @@ impl App {
             .as_ref()
             .filter(|c| c.port == port)
             .map(|c| c.target);
+        let wiz = self
+            .capture
+            .as_ref()
+            .filter(|c| c.port == port)
+            .and_then(|c| c.wizard);
+        let mut start_wizard = false;
         let c = &mut self.cfg.controllers[port];
 
         ui.horizontal(|ui| {
@@ -329,6 +384,61 @@ impl App {
             }
             if c.pak == PakType::EmulatorMemory {
                 ui.weak("The emulator stores this Controller Pak itself (no rumble).");
+            }
+        });
+
+        section_if(ui, sub == 0, "Quick setup", |ui| {
+            if let Some(i) = wiz {
+                let steps = wizard_steps();
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Step {}/{}: press {}",
+                            i + 1,
+                            steps.len(),
+                            target_label(steps[i])
+                        ))
+                        .color(ACCENT)
+                        .strong(),
+                    );
+                    ui.weak("(Esc cancels)");
+                });
+                return;
+            }
+            let suggested = dev.and_then(|d| crate::presets::suggested_preset(&d.name));
+            ui.horizontal_wrapped(|ui| {
+                if let Some(p) = suggested {
+                    if ui
+                        .button(egui::RichText::new(format!("✨ Apply {} preset", p.name)).strong())
+                        .on_hover_text(p.note)
+                        .clicked()
+                    {
+                        (p.apply)(c);
+                    }
+                }
+                ui.menu_button("Controller presets", |ui| {
+                    for p in crate::presets::controller_presets() {
+                        if ui.button(p.name).on_hover_text(p.note).clicked() {
+                            (p.apply)(c);
+                            ui.close();
+                        }
+                    }
+                });
+                if ui
+                    .button("🧭 Guided setup")
+                    .on_hover_text("Press each N64 button on your controller when asked. Works with any adapter (Adaptoid, 8BitDo in D-input mode, Raphnet, …). Keyboard keys are kept.")
+                    .clicked()
+                {
+                    start_wizard = true;
+                }
+            });
+            if suggested.is_none() {
+                if let Some(d) = dev {
+                    if d.name.to_lowercase().contains("adaptoid") {
+                        ui.weak("Adaptoid detected: no built-in mapping. Use Guided setup.");
+                    }
+                }
             }
         });
 
@@ -419,7 +529,7 @@ impl App {
 
         let mut rec_request = None;
         section_if(ui, sub == 2, "Macros", |ui| {
-            ui.weak("A macro is a frame-by-frame sequence of N64 inputs. One frame = one controller poll by the game.");
+            ui.weak("A macro is a frame-by-frame sequence of N64 inputs (buttons + analog stick). One frame = one game frame: the macro advances only when the game reads the controller on a new frame, so it follows the game's own frame rate.");
             ui.horizontal_wrapped(|ui| {
                 for (i, m) in c.macros.iter().enumerate() {
                     let playing = snap.all_pressed(&m.trigger, dev);
@@ -439,6 +549,43 @@ impl App {
                     });
                     self.macro_sel = c.macros.len() - 1;
                 }
+                ui.menu_button("📋 Add from preset", |ui| {
+                    let mut add = None;
+                    ui.label(egui::RichText::new("Built-in").weak());
+                    for m in crate::presets::builtin_macros() {
+                        if ui.button(&m.name).on_hover_text(&m.notes).clicked() {
+                            add = Some(m);
+                        }
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("Saved").weak());
+                    if self.cfg.macro_presets.is_empty() {
+                        ui.weak("None yet: use “Save as preset”.");
+                    }
+                    let mut remove = None;
+                    for (i, m) in self.cfg.macro_presets.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            if ui.button(&m.name).on_hover_text(&m.notes).clicked() {
+                                add = Some(m.clone());
+                            }
+                            if ui
+                                .small_button("🗑")
+                                .on_hover_text("Delete preset")
+                                .clicked()
+                            {
+                                remove = Some(i);
+                            }
+                        });
+                    }
+                    if let Some(i) = remove {
+                        self.cfg.macro_presets.remove(i);
+                    }
+                    if let Some(m) = add {
+                        c.macros.push(m);
+                        self.macro_sel = c.macros.len() - 1;
+                        ui.close();
+                    }
+                });
             });
             let sel = self.macro_sel;
             if sel >= c.macros.len() {
@@ -451,10 +598,30 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("Name");
                     ui.text_edit_singleline(&mut m.name);
+                    if ui
+                        .button("💾 Save as preset")
+                        .on_hover_text("Saves this macro (without its trigger) under its name. Same name overwrites.")
+                        .clicked()
+                    {
+                        let mut p = m.clone();
+                        p.trigger.clear();
+                        let presets = &mut self.cfg.macro_presets;
+                        match presets.iter_mut().find(|x| x.name == p.name) {
+                            Some(x) => *x = p,
+                            None => presets.push(p),
+                        }
+                        self.status = format!("Saved preset “{}”", m.name);
+                    }
                     if ui.button("🗑 Delete macro").clicked() {
                         delete = true;
                     }
                 });
+                ui.add(
+                    egui::TextEdit::multiline(&mut m.notes)
+                        .hint_text("Notes")
+                        .desired_rows(1)
+                        .desired_width(f32::INFINITY),
+                );
                 ui.horizontal(|ui| {
                     ui.label("Trigger (all held)");
                     let active = snap.all_pressed(&m.trigger, dev);
@@ -480,7 +647,7 @@ impl App {
                 });
                 let total: u32 = m.steps.iter().map(|s| s.frames.max(1)).sum();
                 ui.horizontal(|ui| {
-                    ui.label(format!("{} steps, {} frames (≈{:.2}s at 60 polls/s)", m.steps.len(), total, total as f32 / 60.0));
+                    ui.label(format!("{} steps, {} game frames", m.steps.len(), total));
                     let recording = self.macro_rec.as_ref().is_some_and(|r| r.idx == sel);
                     if recording {
                         if ui.button(egui::RichText::new("⏹ Stop recording").color(WARN)).clicked() {
@@ -513,6 +680,15 @@ impl App {
         }
         if let Some(t) = want_capture {
             self.start_capture(port, t);
+        }
+        if start_wizard {
+            self.capture = Some(Capture {
+                port,
+                target: wizard_steps()[0],
+                base: self.snap.clone(),
+                started: Instant::now(),
+                wizard: Some(0),
+            });
         }
     }
 
@@ -929,7 +1105,7 @@ fn macro_steps(ui: &mut Ui, steps: &mut Vec<MacroStep>) {
                     for b in N64Button::ALL {
                         ui.label(b.short());
                     }
-                    ui.label("stick");
+                    ui.label("Stick (x, y)").on_hover_text("Tick to set the analog stick on this step (−128..127, +y = up). Unticked: Merge keeps live stick, Override centers it.");
                     ui.label("");
                     ui.end_row();
                     for (i, s) in steps.iter_mut().enumerate() {
@@ -947,7 +1123,7 @@ fn macro_steps(ui: &mut Ui, steps: &mut Vec<MacroStep>) {
                         }
                         ui.horizontal(|ui| {
                             let mut has = s.stick.is_some();
-                            if ui.checkbox(&mut has, "").changed() {
+                            if ui.checkbox(&mut has, "set").changed() {
                                 s.stick = has.then_some([0, 0]);
                             }
                             if let Some(st) = &mut s.stick {
@@ -1302,4 +1478,174 @@ pub fn run_web() {
             )
             .await;
     });
+}
+
+/// Browser-only debug tab: raw Gamepad API values and raw WebHID input reports.
+#[cfg(target_arch = "wasm32")]
+mod web_debug {
+    use super::*;
+    use crate::input::{PadAxis, PadButton};
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(catch, js_name = tdugHidSupported)]
+        fn hid_supported() -> Result<bool, JsValue>;
+        #[wasm_bindgen(catch, js_name = tdugHidConnect)]
+        fn hid_connect() -> Result<js_sys_promise::Promise, JsValue>;
+        #[wasm_bindgen(catch, js_name = tdugHidJson)]
+        fn hid_json() -> Result<String, JsValue>;
+        #[wasm_bindgen(catch, js_name = tdugPadsJson)]
+        fn pads_json() -> Result<String, JsValue>;
+    }
+
+    mod js_sys_promise {
+        use wasm_bindgen::prelude::*;
+        #[wasm_bindgen]
+        extern "C" {
+            pub type Promise;
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct HidDev {
+        name: String,
+        vid: u16,
+        pid: u16,
+        reports: std::collections::BTreeMap<String, Vec<u8>>,
+        count: u64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Pad {
+        index: u32,
+        id: String,
+        mapping: String,
+        buttons: Vec<f32>,
+        axes: Vec<f32>,
+        rumble: bool,
+    }
+
+    pub fn panel(ui: &mut Ui, snap: &Snapshot) {
+        section(ui, "Browser Gamepad API (unfiltered)", |ui| {
+            ui.weak("Every button/axis index the browser reports. After switching a controller's mode (e.g. 8BitDo S/D switch) or reconnecting, press any button so the browser exposes it again.");
+            let pads: Vec<Pad> =
+                serde_json::from_str(&pads_json().unwrap_or_default()).unwrap_or_default();
+            if pads.is_empty() {
+                ui.weak("No gamepads exposed yet.");
+            }
+            for p in &pads {
+                ui.label(egui::RichText::new(format!("[{}] {}", p.index, p.id)).strong());
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("mapping: {}", p.mapping));
+                    if p.mapping != "standard" {
+                        ui.colored_label(WARN, "non-standard: bind via raw codes or Guided setup");
+                    }
+                    if p.rumble {
+                        ui.weak("· vibrationActuator present");
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("buttons:");
+                    for (i, v) in p.buttons.iter().enumerate() {
+                        let t = egui::RichText::new(format!("{i}:{v:.1}")).monospace();
+                        ui.label(if *v > 0.5 {
+                            t.color(LIVE).strong()
+                        } else {
+                            t.weak()
+                        });
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("axes:");
+                    for (i, v) in p.axes.iter().enumerate() {
+                        let t = egui::RichText::new(format!("{i}:{v:+.3}")).monospace();
+                        ui.label(if v.abs() > 0.2 { t.color(LIVE) } else { t });
+                    }
+                });
+                ui.separator();
+            }
+        });
+        section(ui, "Gamepad state as the plugin sees it (gilrs)", |ui| {
+            if snap.devices.is_empty() {
+                ui.weak(
+                    "No gamepads. Press a button on your controller so the browser exposes it.",
+                );
+            }
+            for d in &snap.devices {
+                ui.label(egui::RichText::new(format!("#{} {}", d.id, d.name)).strong());
+                ui.monospace(format!("uuid {}", d.uuid));
+                ui.horizontal_wrapped(|ui| {
+                    for (i, b) in PadButton::ALL.iter().enumerate() {
+                        let v = d.buttons[i];
+                        ui.colored_label(
+                            if v > 0.5 { LIVE } else { Color32::GRAY },
+                            format!("{}={v:.2}", b.label()),
+                        );
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    for (i, a) in PadAxis::ALL.iter().enumerate() {
+                        ui.monospace(format!("{a:?}={:+.3}", d.axes[i]));
+                    }
+                });
+                ui.label("Raw buttons (code=value):");
+                ui.horizontal_wrapped(|ui| {
+                    for (c, v) in &d.raw_buttons {
+                        ui.colored_label(
+                            if *v > 0.5 { LIVE } else { Color32::GRAY },
+                            format!("{c}={v:.2}"),
+                        );
+                    }
+                });
+                ui.label("Raw axes:");
+                ui.horizontal_wrapped(|ui| {
+                    for (c, v) in &d.raw_axes {
+                        ui.monospace(format!("{c}={v:+.3}"));
+                    }
+                });
+                ui.separator();
+            }
+        });
+        section(ui, "Raw HID input reports (WebHID)", |ui| {
+            if !hid_supported().unwrap_or(false) {
+                ui.colored_label(
+                    WARN,
+                    "WebHID isn't available in this browser (use Chrome or Edge).",
+                );
+                return;
+            }
+            ui.weak("Shows the bytes a HID device sends, before any mapping. Useful for adapters and controllers without a mapping (Adaptoid, 8BitDo in D-input mode, …). Bytes that differ from the previous frame are highlighted.");
+            if ui.button("🔌 Connect HID device…").clicked() {
+                let _ = hid_connect();
+            }
+            let devs: Vec<HidDev> =
+                serde_json::from_str(&hid_json().unwrap_or_default()).unwrap_or_default();
+            let prev_id = ui.scope_id().with("hid_prev");
+            let prev: Vec<Vec<u8>> = ui.data(|d| d.get_temp(prev_id)).unwrap_or_default();
+            let mut now = vec![];
+            for d in &devs {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}  ({:04x}:{:04x})  {} reports",
+                        d.name, d.vid, d.pid, d.count
+                    ))
+                    .strong(),
+                );
+                for (id, bytes) in &d.reports {
+                    let old = prev.get(now.len());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.monospace(format!("id {id:>3}:"));
+                        for (i, b) in bytes.iter().enumerate() {
+                            let changed = old.is_some_and(|o| o.get(i) != Some(b));
+                            let t = egui::RichText::new(format!("{b:02x}")).monospace();
+                            ui.label(if changed { t.color(LIVE) } else { t });
+                        }
+                    });
+                    now.push(bytes.clone());
+                }
+            }
+            ui.data_mut(|d| d.insert_temp(prev_id, now));
+        });
+    }
 }

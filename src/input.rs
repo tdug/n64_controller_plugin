@@ -177,6 +177,32 @@ pub enum Input {
         code: u32,
         positive: bool,
     },
+    /// Hat switch reported as a single axis (browser Gamepad API: -1..1 for 8 directions,
+    /// ≈1.29 when centred). `dir`: 0 up, 1 right, 2 down, 3 left.
+    RawHat {
+        code: u32,
+        dir: u8,
+    },
+}
+
+/// Is `dir` (0 up, 1 right, 2 down, 3 left) held on a single-axis hat value?
+pub fn hat_pressed(v: f32, dir: u8) -> bool {
+    if !(-1.1..=1.1).contains(&v) {
+        return false; // centred
+    }
+    // 8 positions clockwise from up.
+    let k = (((v + 1.0) * 3.5).round() as i32).rem_euclid(8);
+    let dirs: &[u8] = match k {
+        0 => &[0],
+        1 => &[0, 1],
+        2 => &[1],
+        3 => &[1, 2],
+        4 => &[2],
+        5 => &[2, 3],
+        6 => &[3],
+        _ => &[3, 0],
+    };
+    dirs.contains(&dir)
 }
 
 impl Input {
@@ -199,6 +225,10 @@ impl Input {
             Input::RawAxis { code, positive } => {
                 format!("Pad axis #{code}{}", if *positive { "+" } else { "-" })
             }
+            Input::RawHat { code, dir } => format!(
+                "Pad hat #{code} {}",
+                ["Up", "Right", "Down", "Left"][(*dir as usize).min(3)]
+            ),
         }
     }
 }
@@ -296,6 +326,12 @@ impl Snapshot {
                     .find(|(c, _)| c == code)
                     .map_or(0.0, |(_, v)| dir(*v, *positive))
             }),
+            Input::RawHat { code, dir: hd } => dev.map_or(0.0, |d| {
+                d.raw_axes
+                    .iter()
+                    .find(|(c, _)| c == code)
+                    .map_or(0.0, |(_, v)| hat_pressed(*v, *hd) as u8 as f32)
+            }),
         }
     }
 
@@ -351,11 +387,29 @@ impl Snapshot {
                 }
             }
             for (code, v) in &d.raw_axes {
-                let was = b
-                    .raw_axes
-                    .iter()
-                    .find(|(c, _)| c == code)
-                    .map_or(0.0, |x| x.1);
+                let base = b.raw_axes.iter().find(|(c, _)| c == code).map(|x| x.1);
+                let was = base.unwrap_or(0.0);
+                // Hat encoded as one axis (browser): centred value is outside -1..1.
+                // A first-seen axis sitting exactly on the 1/7 hat grid (not ±1) is a hat too.
+                let on_grid = |x: f32| {
+                    let k = (x + 1.0) * 3.5;
+                    (k - k.round()).abs() < 0.01 && x.abs() < 0.99
+                };
+                let hat_like = was > 1.1 || (base.is_none() && on_grid(*v));
+                if hat_like && *v <= 1.1 {
+                    if let Some(hd) = (0..4).find(|hd| hat_pressed(*v, *hd)) {
+                        return Some((
+                            Input::RawHat {
+                                code: *code,
+                                dir: hd,
+                            },
+                            Some(d.id),
+                        ));
+                    }
+                }
+                if was > 1.1 || *v > 1.1 {
+                    continue;
+                }
                 if v.abs() > 0.6 && (v - was).abs() > 0.5 {
                     return Some((
                         Input::RawAxis {
@@ -625,5 +679,20 @@ impl InputManager {
 
     pub fn stop_all_rumble(&mut self) {
         self.rumble.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hat_axis_decoding() {
+        assert!(!hat_pressed(1.2857, 0)); // centred
+        assert!(hat_pressed(-1.0, 0)); // up
+        assert!(hat_pressed(-0.4286, 1)); // right
+        assert!(hat_pressed(0.1429, 2)); // down
+        assert!(hat_pressed(0.7143, 3)); // left
+        assert!(hat_pressed(-0.7143, 0) && hat_pressed(-0.7143, 1)); // up-right
     }
 }

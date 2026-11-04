@@ -8,6 +8,9 @@ An N64 controller plugin written in Rust. One library works with **Project64** (
 
 - **4 controllers**, each bound to keyboard keys and/or any gamepad. Gamepads are read through [gilrs](https://gitlab.com/gilrs-project/gilrs): Windows.Gaming.Input on Windows, evdev on Linux, IOKit on macOS.
 - **Bindings**: each N64 button and stick direction accepts several inputs. Analog axes, triggers and buttons can all be bound to anything.
+- **Quick setup**
+  - Controller presets: the 8BitDo 64 in D mode ("8BitDo 64 BT") and S mode ("N64 Controller", which also fits Nintendo's Switch Online N64 pad). When one of these is the selected gamepad, the UI offers a one-click button to apply its preset.
+  - **Guided setup**: press each N64 button when prompted. It works with any adapter that has no built-in mapping (Adaptoid, Raphnet, unmapped modes), and it keeps your keyboard keys.
 - **Analog stick**
   - Live view of the host stick input and the resulting N64 output.
   - **Range calibration**: record the resting center, then spin the stick around its gate. The recorded outline becomes the stick's 100 % reach in every direction, so a stick that is short in some directions still reaches full range.
@@ -19,6 +22,9 @@ An N64 controller plugin written in Rust. One library works with **Project64** (
   - Merge with live input, or override it.
   - Play once, loop while held, or toggle a loop.
   - Edit the steps by hand, or record them from your controller.
+  - Every step can set both buttons and the analog stick (x, y).
+  - A macro advances one step per *game* frame: once per new frame in which the game reads the controller, not once per plugin call. A 30 fps game therefore plays a 10-frame step for 10 of its own frames.
+  - **Presets**: built-in "SM64: Min Distance Triple Jump" and "OoT/MM: Quick Spin". Save your own macros as named presets; presets never store trigger bindings.
 - **Paks**
   - Controller Pak (memory). Saved as standard 32 KiB `.mpk` files, one per game or one per port.
   - **Rumble Pak**. Drives your gamepad's motors.
@@ -61,6 +67,10 @@ The same UI compiles to WebAssembly and uses the browser Gamepad API.
 
 - **Works**: bindings, calibration, curves, macros, and the self-test.
 - **Disabled**: rumble (gilrs has no web force feedback), pak files, and the emulator plugin.
+- **Debug tab** (browser only) shows three views:
+  - the unfiltered Gamepad API: every button and axis index, plus the mapping type;
+  - the plugin's view of each pad;
+  - **raw WebHID input reports**: connect any HID device and watch its bytes change. Chrome and Edge only.
 - **Saving**: config is saved to `localStorage`. Use *Settings → Import / export* to move it to a desktop install.
 
 ```sh

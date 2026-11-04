@@ -162,6 +162,7 @@ impl Default for MacroStep {
 #[serde(default)]
 pub struct Macro {
     pub name: String,
+    pub notes: String,
     /// All of these must be held (a chord) to trigger.
     pub trigger: Vec<Input>,
     pub mode: MacroMode,
@@ -173,6 +174,7 @@ impl Default for Macro {
     fn default() -> Self {
         Macro {
             name: "New macro".into(),
+            notes: String::new(),
             trigger: vec![],
             mode: MacroMode::Merge,
             playback: Playback::Once,
@@ -295,6 +297,8 @@ pub struct Config {
     pub background_input: bool,
     /// Separate Controller Pak file per game (otherwise one per port).
     pub pak_per_game: bool,
+    /// User-saved macro presets (stored without trigger bindings).
+    pub macro_presets: Vec<Macro>,
 }
 
 impl Default for Config {
@@ -305,6 +309,7 @@ impl Default for Config {
                 .collect(),
             background_input: false,
             pak_per_game: true,
+            macro_presets: vec![],
         }
     }
 }

@@ -15,6 +15,29 @@
   <div id="loading">Loading N64 Input test harness…</div>
   <canvas id="the_canvas_id"></canvas>
   <script>
+    // WebHID bridge for the Debug tab (raw HID input reports). Chrome/Edge only.
+    window.tdugHid = [];
+    window.tdugHidSupported = () => 'hid' in navigator;
+    window.tdugHidConnect = async () => {
+      if (!('hid' in navigator)) return;
+      const devices = await navigator.hid.requestDevice({ filters: [] });
+      for (const d of devices) {
+        if (!d.opened) await d.open();
+        const entry = { name: d.productName || '?', vid: d.vendorId, pid: d.productId, reports: {}, count: 0 };
+        window.tdugHid.push(entry);
+        d.addEventListener('inputreport', (e) => {
+          entry.reports[String(e.reportId)] = Array.from(new Uint8Array(e.data.buffer));
+          entry.count++;
+        });
+      }
+    };
+    window.tdugHidJson = () => JSON.stringify(window.tdugHid);
+    // Unfiltered Gamepad API state, for the Debug tab.
+    window.tdugPadsJson = () => JSON.stringify(Array.from(navigator.getGamepads ? navigator.getGamepads() : [])
+      .filter(Boolean)
+      .map(g => ({ index: g.index, id: g.id, mapping: g.mapping || '(none)', connected: g.connected,
+                   buttons: g.buttons.map(b => b.value), axes: Array.from(g.axes),
+                   rumble: !!(g.vibrationActuator) })));
     // Hide the loading text once eframe has painted.
     const obs = new MutationObserver(() => document.getElementById('loading')?.remove());
     obs.observe(document.getElementById('the_canvas_id'), { attributes: true });

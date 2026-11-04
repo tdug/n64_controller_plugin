@@ -304,6 +304,8 @@ pub extern "C" fn GetKeys(port: c_int, keys: *mut u32) {
         let sh = shared();
         let raw = lock(&sh.controls).raw[port];
         let mut rt = lock(&sh.rt);
+        // The emulator calls GetKeys once per VI: use it as the frame clock.
+        rt.vi_tick();
         let st = if raw {
             rt.last_state(port)
         } else {
@@ -323,6 +325,13 @@ pub extern "C" fn ControllerCommand(_port: c_int, _cmd: *mut u8) {
 #[unsafe(no_mangle)]
 pub extern "C" fn ReadController(port: c_int, cmd: *mut u8) {
     guard(|| {
+        if port == -1 {
+            // End of a PIF transaction.
+            if let Some(r) = lock(&RUNNING).as_ref() {
+                lock(&r.shared.rt).pif_cycle_end();
+            }
+            return;
+        }
         if !(0..PORTS as c_int).contains(&port) || cmd.is_null() {
             return;
         }

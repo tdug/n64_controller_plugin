@@ -7,6 +7,7 @@ pub mod input;
 pub mod n64;
 pub mod pak;
 pub mod platform;
+pub mod presets;
 pub mod runtime;
 pub mod stick;
 
