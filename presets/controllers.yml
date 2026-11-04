@@ -28,7 +28,7 @@
 #                                            LeftStickX LeftStickY RightStickX RightStickY LeftZ RightZ DPadX DPadY
 #   {type: raw_button, code: 3}              unmapped device button (see the web Debug tab)
 #   {type: raw_axis, code: 2, positive: false}
-#   {type: raw_hat, code: 9, dir: 0}         single-axis hat (browser): dir 0 up, 1 right, 2 down, 3 left
+#   {type: raw_hat, code: 56, dir: 0}         single-axis hat (browser): dir 0 up, 1 right, 2 down, 3 left
 #
 # Applying a preset replaces gamepad bindings only; keyboard keys are kept.
 
@@ -101,13 +101,14 @@ presets:
   - name: "8BitDo 64 — S mode (browser, partial)"
     note: >-
       S mode identifies as Nintendo's Switch Online N64 controller (057e:2019). Browsers report
-      it with no standard mapping; the D-pad is a hat on axis 9. Only the D-pad is filled in:
-      run Guided setup and export to complete it.
+      it with no standard mapping; the D-pad is a hat on browser axis 9, which the plugin sees as
+      raw code 56 (gilrs numbers browser axes >= 4 as index + button count + 31). Only the D-pad
+      is filled in: use Guided setup for the rest.
     ids: ["057e:2019"]
     names: [["n64 controller"]]
     platforms: [web]
     buttons:
-      DUp:    [{type: raw_hat, code: 9, dir: 0}]
-      DRight: [{type: raw_hat, code: 9, dir: 1}]
-      DDown:  [{type: raw_hat, code: 9, dir: 2}]
-      DLeft:  [{type: raw_hat, code: 9, dir: 3}]
+      DUp:    [{type: raw_hat, code: 56, dir: 0}]
+      DRight: [{type: raw_hat, code: 56, dir: 1}]
+      DDown:  [{type: raw_hat, code: 56, dir: 2}]
+      DLeft:  [{type: raw_hat, code: 56, dir: 3}]

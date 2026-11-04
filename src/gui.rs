@@ -33,21 +33,42 @@ struct Capture {
     wizard: Option<usize>,
 }
 
-/// Guided setup order: every N64 button, then the four stick directions.
-fn wizard_steps() -> Vec<Target> {
-    N64Button::ALL
-        .iter()
-        .map(|b| Target::Button(*b))
-        .chain(Dir::ALL.iter().map(|d| Target::Stick(*d)))
-        .collect()
+/// One guided-setup prompt.
+struct WizStep {
+    target: Target,
+    label: String,
+    /// Adds a second input instead of replacing (e.g. a controller with two Z buttons).
+    extra: bool,
 }
 
-fn target_label(t: Target) -> String {
-    match t {
-        Target::Button(b) => b.label().to_string(),
-        Target::Stick(d) => d.label().to_string(),
-        _ => String::new(),
+/// Guided setup order: every N64 button (with an optional second Z), then the stick.
+fn wizard_steps() -> Vec<WizStep> {
+    let mut v = vec![];
+    for b in N64Button::ALL {
+        v.push(WizStep {
+            target: Target::Button(b),
+            label: b.label().into(),
+            extra: false,
+        });
+        if b == N64Button::Z {
+            v.push(WizStep {
+                target: Target::Button(b),
+                label: "a second Z button (Skip if there isn't one)".into(),
+                extra: true,
+            });
+        }
     }
+    for d in Dir::ALL {
+        v.push(WizStep {
+            target: Target::Stick(d),
+            label: format!(
+                "the stick fully {}",
+                d.label().trim_start_matches("Stick ").to_lowercase()
+            ),
+            extra: false,
+        });
+    }
+    v
 }
 
 struct MacroRec {
@@ -79,6 +100,8 @@ pub struct App {
     drag_point: Option<usize>,
     controller_presets: Vec<crate::presets::ControllerPreset>,
     presets_error: Option<String>,
+    /// What each guided-setup step captured.
+    wizard_log: Vec<String>,
 }
 
 impl App {
@@ -106,6 +129,7 @@ impl App {
             drag_point: None,
             controller_presets,
             presets_error,
+            wizard_log: vec![],
         }
     }
 
@@ -138,13 +162,33 @@ impl App {
         });
     }
 
+    /// Move guided setup on to step `next` (or finish).
+    fn wizard_goto(&mut self, port: usize, next: usize) {
+        let steps = wizard_steps();
+        if next < steps.len() {
+            self.capture = Some(Capture {
+                port,
+                target: steps[next].target,
+                base: self.snap.clone(),
+                started: Instant::now(),
+                wizard: Some(next),
+            });
+        } else {
+            self.capture = None;
+            self.status = "Guided setup complete".into();
+        }
+    }
+
     fn handle_capture(&mut self) {
         let Some(cap) = &self.capture else { return };
-        let limit = if cap.wizard.is_some() { 20 } else { 6 };
-        if self.snap.keys[0x1B] || cap.started.elapsed() > Duration::from_secs(limit) {
+        if self.snap.keys[0x1B] {
             if cap.wizard.is_some() {
                 self.status = "Guided setup cancelled".into();
             }
+            self.capture = None;
+            return;
+        }
+        if cap.wizard.is_none() && cap.started.elapsed() > Duration::from_secs(6) {
             self.capture = None;
             return;
         }
@@ -170,26 +214,20 @@ impl App {
             Target::MacroTrigger(i) => &mut c.macros[i].trigger,
             Target::PakSwitch => &mut c.pak_switch,
         };
-        if wizard.is_some() {
-            // Guided setup replaces gamepad bindings, keeps keyboard keys.
-            list.retain(|i| matches!(i, Input::Key { .. }));
+        let step = wizard.map(|i| (i, wizard_steps().swap_remove(i)));
+        if let Some((_, s)) = &step {
+            if !s.extra {
+                // Guided setup replaces gamepad bindings, keeps keyboard keys.
+                list.retain(|i| matches!(i, Input::Key { .. }));
+            }
         }
+        let text = input.label();
         if !list.contains(&input) {
             list.push(input);
         }
-        if let Some(i) = wizard {
-            let steps = wizard_steps();
-            if i + 1 < steps.len() {
-                self.capture = Some(Capture {
-                    port,
-                    target: steps[i + 1],
-                    base: self.snap.clone(),
-                    started: Instant::now(),
-                    wizard: Some(i + 1),
-                });
-            } else {
-                self.status = "Guided setup complete".into();
-            }
+        if let Some((i, s)) = step {
+            self.wizard_log.push(format!("{} ← {text}", s.label));
+            self.wizard_goto(port, i + 1);
         }
     }
 }
@@ -309,6 +347,7 @@ impl App {
             .filter(|c| c.port == port)
             .and_then(|c| c.wizard);
         let mut start_wizard = false;
+        let mut wiz_action: Option<usize> = None;
         let c = &mut self.cfg.controllers[port];
 
         ui.horizontal(|ui| {
@@ -402,13 +441,27 @@ impl App {
                             "Step {}/{}: press {}",
                             i + 1,
                             steps.len(),
-                            target_label(steps[i])
+                            steps[i].label
                         ))
                         .color(ACCENT)
                         .strong(),
                     );
-                    ui.weak("(Esc cancels)");
                 });
+                ui.horizontal(|ui| {
+                    if ui.button("⏭ Skip").clicked() {
+                        wiz_action = Some(i + 1);
+                    }
+                    if i > 0 && ui.button("⏮ Back").clicked() {
+                        wiz_action = Some(i - 1);
+                    }
+                    if ui.button("✖ Cancel").clicked() {
+                        wiz_action = Some(usize::MAX);
+                    }
+                    ui.weak("Esc also cancels");
+                });
+                for line in self.wizard_log.iter().rev().take(4) {
+                    ui.weak(format!("✔ {line}"));
+                }
                 return;
             }
             let presets = &self.controller_presets;
@@ -708,13 +761,16 @@ impl App {
             self.start_capture(port, t);
         }
         if start_wizard {
-            self.capture = Some(Capture {
-                port,
-                target: wizard_steps()[0],
-                base: self.snap.clone(),
-                started: Instant::now(),
-                wizard: Some(0),
-            });
+            self.wizard_log.clear();
+            self.wizard_goto(port, 0);
+        }
+        match wiz_action {
+            Some(usize::MAX) => {
+                self.capture = None;
+                self.status = "Guided setup cancelled".into();
+            }
+            Some(next) => self.wizard_goto(port, next),
+            None => {}
         }
     }
 
