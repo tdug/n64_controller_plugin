@@ -65,7 +65,40 @@ presets:
       left:  [{type: axis, axis: LeftStickX, positive: false}]
       right: [{type: axis, axis: LeftStickX, positive: true}]
 
-  - name: "8BitDo 64 S mode / Switch Online N64 (browser)"
+  - name: "8BitDo 64 — S mode (macOS)"
+    note: >-
+      Verified on macOS (Bluetooth, S switch position). In S mode the 8BitDo identifies as
+      Nintendo's Switch Online N64 controller ("NSO N64 Controller", 057e:2019); this preset
+      should also fit the Nintendo original. The mapping database reports all four C buttons
+      as positive right-stick moves (C-Up and C-Down both read +RightStickY), so they're bound
+      by raw code. Extras: Home = Mode, Star = raw button 589838. Dash and stick click send
+      nothing in this mode.
+    names: [["nso n64"], ["n64 controller"]]
+    ids: ["057e:2019"]
+    platforms: [macos]
+    deadzone: 0.05
+    buttons:
+      A:      [{type: button, button: South}]
+      B:      [{type: button, button: East}]
+      Z:      [{type: button, button: LeftTrigger}, {type: button, button: RightTrigger}]
+      Start:  [{type: button, button: Start}]
+      L:      [{type: button, button: LeftShoulder}]
+      R:      [{type: button, button: RightShoulder}]
+      DUp:    [{type: axis, axis: DPadY, positive: true}]
+      DDown:  [{type: axis, axis: DPadY, positive: false}]
+      DLeft:  [{type: axis, axis: DPadX, positive: false}]
+      DRight: [{type: axis, axis: DPadX, positive: true}]
+      CUp:    [{type: raw_axis, code: 589827, positive: true}]
+      CDown:  [{type: raw_axis, code: 589832, positive: true}]
+      CLeft:  [{type: raw_axis, code: 589828, positive: true}]
+      CRight: [{type: raw_axis, code: 589833, positive: true}]
+    stick:
+      up:    [{type: axis, axis: LeftStickY, positive: true}]
+      down:  [{type: axis, axis: LeftStickY, positive: false}]
+      left:  [{type: axis, axis: LeftStickX, positive: false}]
+      right: [{type: axis, axis: LeftStickX, positive: true}]
+
+  - name: "8BitDo 64 — S mode (browser, partial)"
     note: >-
       S mode identifies as Nintendo's Switch Online N64 controller (057e:2019). Browsers report
       it with no standard mapping; the D-pad is a hat on axis 9. Only the D-pad is filled in:
