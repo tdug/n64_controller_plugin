@@ -33,23 +33,28 @@
 # Applying a preset replaces gamepad bindings only; keyboard keys are kept.
 
 presets:
-  - name: "8BitDo 64 (standard layout)"
+  - name: "8BitDo 64 — D mode"
     note: >-
-      For systems that recognise the controller as a standard gamepad (labels light up when
-      pressed). UNVERIFIED: if buttons are wrong, run Guided setup and export a preset.
-    names: [["8bitdo", "64"], ["8bitdo", "n64"]]
+      Verified on macOS (Bluetooth, D switch position; reports as "8BitDo 64", 2dc8:3019).
+      Both back triggers are Z. The D-pad reports as DPadX/DPadY axes. Don't bind the DPadLeft
+      *button*: the mapping database labels the Star button as DPadLeft (code 589842).
+      Extra buttons (unbound; free for macros, modifiers or the pak-swap hotkey):
+      Home/8BitDo logo = Mode, Star = DPadLeft button (589842), Dash = Select,
+      stick click = LeftThumb.
+    names: [["8bitdo", "64"]]
+    ids: ["2dc8:3019"]
     deadzone: 0.05
     buttons:
       A:      [{type: button, button: South}]
-      B:      [{type: button, button: West}, {type: button, button: East}]
-      Z:      [{type: button, button: LeftTrigger}]
+      B:      [{type: button, button: East}]
+      Z:      [{type: button, button: LeftTrigger}, {type: button, button: RightTrigger}]
       Start:  [{type: button, button: Start}]
       L:      [{type: button, button: LeftShoulder}]
-      R:      [{type: button, button: RightShoulder}, {type: button, button: RightTrigger}]
-      DUp:    [{type: button, button: DPadUp}]
-      DDown:  [{type: button, button: DPadDown}]
-      DLeft:  [{type: button, button: DPadLeft}]
-      DRight: [{type: button, button: DPadRight}]
+      R:      [{type: button, button: RightShoulder}]
+      DUp:    [{type: axis, axis: DPadY, positive: true}]
+      DDown:  [{type: axis, axis: DPadY, positive: false}]
+      DLeft:  [{type: axis, axis: DPadX, positive: false}]
+      DRight: [{type: axis, axis: DPadX, positive: true}]
       CUp:    [{type: axis, axis: RightStickY, positive: true}]
       CDown:  [{type: axis, axis: RightStickY, positive: false}]
       CLeft:  [{type: axis, axis: RightStickX, positive: false}]
