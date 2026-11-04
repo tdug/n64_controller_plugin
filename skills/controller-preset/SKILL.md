@@ -17,8 +17,10 @@ Create or fix a controller preset from real input data. Never guess button codes
    ```sh
    tools/gamepad-listen/target/release/gamepad-listen > <scratchpad>/listen.log 2>&1
    ```
-3. **Ask the user to press controls in a fixed order,** pausing ~1 s between each. Ask them to say
-   when they're done. Standard N64 order:
+3. **Ask the user for one control at a time.** Send a single message naming one control, wait for
+   them to reply, check the log tail (`tail -5 <scratchpad>/listen.log`) to confirm the event
+   arrived, record the code, then ask for the next. This keeps every log line tied to a known
+   control, with no timestamp guessing. Standard N64 order:
    1. Any button (to wake the controller), then wait 2 s.
    2. A, B, Z, Start, L, R.
    3. D-pad Up, Right, Down, Left.
@@ -28,8 +30,8 @@ Create or fix a controller preset from real input data. Never guess button codes
 
    If the controller has mode switches (for example 8BitDo 64 S/D), do one capture per mode and
    ask the user which mode it's in.
-4. **Read the log and stop the listener** (`pkill -f gamepad-listen`). Match `PRESS`/`AXIS` lines
-   to the order above using timestamps. The log format and input forms are in
+4. **Stop the listener** when done (`pkill -f gamepad-listen`). If a control produced no event,
+   ask once more, then note it as unmapped. The log format and input forms are in
    `tools/gamepad-listen/README.md`; mapping rules are in `tools/gamepad-listen/AGENTS.md`.
 5. **Edit `presets/controllers.yml`.** Add or replace the entry:
    - `names` / `ids` come from the `PAD` line.

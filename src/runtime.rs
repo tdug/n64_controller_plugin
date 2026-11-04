@@ -487,7 +487,7 @@ mod tests {
         let up = Snapshot::default();
         let a = N64Button::A.mask();
         let b = N64Button::B.mask();
-        let mut frame = |rt: &mut Runtime, s: &Snapshot| {
+        let frame = |rt: &mut Runtime, s: &Snapshot| {
             rt.vi_tick();
             let first = rt.poll(0, s);
             // Extra polls within the same frame must not advance the macro.
