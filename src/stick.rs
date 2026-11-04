@@ -271,7 +271,7 @@ mod tests {
         let s = StickSettings::default();
         assert_eq!(s.process([1.0, 0.0], 1.0), (85, 0));
         assert_eq!(s.process([0.0, -1.0], 1.0), (0, -85));
-        let (x, y) = s.process([0.7071, 0.7071], 1.0);
+        let (x, y) = s.process([std::f32::consts::FRAC_1_SQRT_2; 2], 1.0);
         assert_eq!((x, y), (70, 70));
         // keyboard corner (1,1) clamps to the same diagonal
         assert_eq!(s.process([1.0, 1.0], 1.0), (70, 70));
