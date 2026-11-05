@@ -557,6 +557,14 @@ impl App {
             if c.pak.has_rumble() || c.alt_pak.has_rumble() {
                 match dev {
                     Some(d) if d.ff => ui.weak("Host gamepad supports rumble ✔"),
+                    #[cfg(windows)]
+                    Some(_) => ui.colored_label(
+                        WARN,
+                        "This gamepad reports no rumble support (on Windows, Bluetooth pads \
+                         gilrs doesn't recognize as an XInput-class controller can't be driven \
+                         for rumble even if they have motors)",
+                    ),
+                    #[cfg(not(windows))]
                     Some(_) => ui.colored_label(WARN, "This gamepad reports no rumble support"),
                     None => ui.weak("No gamepad: rumble has nowhere to go"),
                 };
