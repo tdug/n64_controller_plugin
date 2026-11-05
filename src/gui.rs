@@ -1351,14 +1351,6 @@ fn group_editor(
                     ui.selectable_value(m, opt, opt.label());
                 }
             });
-        if g == Group::Stick || g == Group::C {
-            if ui.small_button("Left stick").clicked() {
-                bind_pad_stick(c, g, false);
-            }
-            if ui.small_button("Right stick").clicked() {
-                bind_pad_stick(c, g, true);
-            }
-        }
     });
     let (hx, vy) = c.group_modes.get(g).axes();
     let on = |i: &Input| snap.value(i, dev) > 0.5;
@@ -1442,27 +1434,6 @@ fn group_editor(
             }
         });
     want
-}
-
-/// Bind a gamepad stick's axes to a group (and switch it to dual-axis).
-fn bind_pad_stick(c: &mut ControllerConfig, g: Group, right: bool) {
-    use crate::input::PadAxis;
-    let (x, y) = if right {
-        (PadAxis::RightStickX, PadAxis::RightStickY)
-    } else {
-        (PadAxis::LeftStickX, PadAxis::LeftStickY)
-    };
-    for (d, inp) in [
-        (Dir::Up, Input::axis(y, true)),
-        (Dir::Down, Input::axis(y, false)),
-        (Dir::Left, Input::axis(x, false)),
-        (Dir::Right, Input::axis(x, true)),
-    ] {
-        let l = c.group_dir(g, d);
-        l.retain(|i| !i.is_axis());
-        l.push(inp);
-    }
-    *c.group_modes.get_mut(g) = GroupMode::DualAxis;
 }
 
 /// Binding chips + bind button. Each chip lights up only while *its* input is active.

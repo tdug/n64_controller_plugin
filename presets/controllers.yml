@@ -147,8 +147,8 @@ presets:
     source: hid
     note: >-
       Raw HID bindings for S mode (Nintendo basic report 0x3F), captured byte-by-byte with
-      tools/hid-listen. Works anywhere the device can be opened as HID: desktop, and Chrome/Edge
-      via WebHID. Also fits Nintendo's Switch Online N64 controller. Home = byte 1 bit 4 and
+      tools/hid-listen and verified in Chrome (WebHID, "Connect via HID"). Works anywhere the
+      device can be opened as HID: desktop, and Chrome/Edge via WebHID. Also fits Nintendo's Switch Online N64 controller. Home = byte 1 bit 4 and
       Star = byte 1 bit 5 are left unbound (on macOS, Home also opens the Games app). Dash and
       stick click send nothing in S mode.
     ids: ["057e:2019"]
