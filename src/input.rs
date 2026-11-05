@@ -490,7 +490,13 @@ impl Snapshot {
 
     /// First input that became active between `base` and `self` (for binding capture).
     /// Returns the input and, for gamepad inputs, the device it came from.
-    pub fn detect_new(&self, base: &Snapshot) -> Option<(Input, Option<usize>)> {
+    ///
+    /// `prefer` is the device currently assigned to the control being bound, checked before any
+    /// other device. A pad with no usable OS gamepad mapping (e.g. a Switch-mode 8BitDo) still
+    /// shows up as a second, garbled `DeviceState` alongside its raw-HID one; without this, a
+    /// press on the real (HID) device could race with noise from the garbled one and get
+    /// attributed to it instead, silently reassigning the control to the wrong device.
+    pub fn detect_new(&self, base: &Snapshot, prefer: Option<usize>) -> Option<(Input, Option<usize>)> {
         for code in 7..=255u8 {
             // Skip mouse buttons and the side-agnostic modifier codes (the L/R variants also fire).
             if matches!(code, 0x10..=0x12) {
@@ -500,7 +506,9 @@ impl Snapshot {
                 return Some((Input::key(code), None));
             }
         }
-        for d in &self.devices {
+        let preferred = prefer.and_then(|id| self.devices.iter().find(|d| d.id == id));
+        let rest = self.devices.iter().filter(|d| Some(d.id) != prefer);
+        for d in preferred.into_iter().chain(rest) {
             let empty = DeviceState::default();
             let b = base.devices.iter().find(|x| x.id == d.id).unwrap_or(&empty);
             for (i, btn) in PadButton::ALL.iter().enumerate() {
@@ -850,7 +858,7 @@ impl InputManager {
     }
 
     fn poll_hid(&self, snap: &mut Snapshot) {
-        let mut push = |i: usize, name: String, vid: u16, pid: u16, reports: Vec<(u8, Vec<u8>)>| {
+        let mut push = |i: usize, name: String, vid: u16, pid: u16, ff: bool, reports: Vec<(u8, Vec<u8>)>| {
             snap.devices.push(DeviceState {
                 id: HID_ID_BASE + i,
                 uuid: format!("hid:{vid:04x}:{pid:04x}"),
@@ -858,6 +866,7 @@ impl InputManager {
                 vendor: Some(vid),
                 product: Some(pid),
                 is_hid: true,
+                ff,
                 hid: reports,
                 ..Default::default()
             });
@@ -865,12 +874,12 @@ impl InputManager {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some((_, r)) = &self.hid {
             for (i, d) in r.devices().into_iter().enumerate() {
-                push(i, d.name, d.vid, d.pid, d.reports.into_iter().collect());
+                push(i, d.name, d.vid, d.pid, d.ff, d.reports.into_iter().collect());
             }
         }
         #[cfg(target_arch = "wasm32")]
         for (i, d) in web_hid::devices().into_iter().enumerate() {
-            push(i, d.name, d.vid, d.pid, d.reports);
+            push(i, d.name, d.vid, d.pid, false, d.reports);
         }
     }
 
@@ -916,6 +925,13 @@ impl InputManager {
 
     /// Start (strength > 0) or stop rumble on a device.
     pub fn set_rumble(&mut self, device: usize, strength: f32) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if device >= HID_ID_BASE {
+            if let Some((_, r)) = &self.hid {
+                r.set_rumble(device - HID_ID_BASE, strength);
+            }
+            return;
+        }
         self.rumble.remove(&device); // dropping an Effect stops it
         if strength <= 0.0 {
             return;
@@ -959,6 +975,10 @@ impl InputManager {
 
     pub fn stop_all_rumble(&mut self) {
         self.rumble.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((_, r)) = &self.hid {
+            r.stop_all_rumble();
+        }
     }
 }
 

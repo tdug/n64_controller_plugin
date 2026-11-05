@@ -19,6 +19,10 @@ serde_yaml_ng = "0.10"
 web-time = "1"
 gilrs = "0.11"
 egui_plot = "0.38"
+# monochrome_emoji_fonts bundles the icon glyphs several buttons use (e.g. "X", "+") so they
+# render consistently everywhere, instead of depending on whatever the OS font happens to cover
+# (they rendered as missing-glyph boxes on Windows; see tdug/n64_controller_plugin#6).
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -45,6 +49,12 @@ windows-sys = { version = "0.61", features = [
   "Win32_Media",
   "Win32_Security",
 ] }
+
+[patch.crates-io]
+# Patched to drive force feedback for pads gilrs only sees as a generic RawGameController
+# (not an XInput-class Gamepad), e.g. the 8BitDo 64 over Bluetooth. See vendor/gilrs-core
+# and tdug/n64_controller_plugin#3.
+gilrs-core = { path = "vendor/gilrs-core" }
 
 [profile.release]
 opt-level = 3

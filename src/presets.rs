@@ -751,7 +751,7 @@ mod tests {
             ..Default::default()
         };
         let base = snap(IDLE);
-        let got = |p| snap(p).detect_new(&base).map(|(i, _)| i);
+        let got = |p| snap(p).detect_new(&base, None).map(|(i, _)| i);
         assert_eq!(
             got(with(&[(0, 0x02)])),
             Some(Input::HidBit {
