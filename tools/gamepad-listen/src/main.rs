@@ -54,11 +54,12 @@ fn log(g: &mut Gilrs) {
             EventType::Connected => {
                 let p = g.gamepad(ev.id);
                 format!(
-                    "CONNECT name={:?} vid={:04x?} pid={:04x?} mapping={:?}",
+                    "CONNECT name={:?} vid={:04x?} pid={:04x?} mapping={:?} ff={}",
                     p.name(),
                     p.vendor_id(),
                     p.product_id(),
-                    p.mapping_source()
+                    p.mapping_source(),
+                    p.is_ff_supported()
                 )
             }
             EventType::Disconnected => "DISCONNECT".into(),
