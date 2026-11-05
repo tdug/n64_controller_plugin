@@ -154,6 +154,9 @@ pub struct App {
     hid_assign: Option<usize>,
     /// Instruction shown after choosing a mode the controller isn't in.
     mode_hint: Option<String>,
+    /// Per-port: show the full button/axis binding UI even though a preset already covers this
+    /// device. Transient (not saved) — starts collapsed again next launch.
+    customizing: [bool; PORTS],
 }
 
 impl App {
@@ -184,6 +187,7 @@ impl App {
             wizard_log: vec![],
             hid_assign: None,
             mode_hint: None,
+            customizing: [false; PORTS],
         }
     }
 
@@ -267,7 +271,11 @@ impl App {
             self.capture = None;
             return;
         }
-        let Some((input, dev_id)) = self.snap.detect_new(&cap.base) else {
+        let prefer = self
+            .snap
+            .resolve(&self.cfg.controllers[cap.port].device, cap.port)
+            .map(|d| d.id);
+        let Some((input, dev_id)) = self.snap.detect_new(&cap.base, prefer) else {
             return;
         };
         let (port, target, wizard) = (cap.port, cap.target, cap.wizard);
@@ -391,7 +399,10 @@ impl App {
             ui.separator();
             for i in 0..PORTS {
                 let plugged = self.cfg.controllers[i].plugged;
-                let label = format!("{} Controller {}", if plugged { "●" } else { "○" }, i + 1);
+                // Color, not a glyph, marks plugged/unplugged: circle glyphs (●/○) render
+                // inconsistently depending on what the OS/bundled fonts happen to cover.
+                let label = egui::RichText::new(format!("Controller {}", i + 1))
+                    .color(if plugged { LIVE } else { Color32::GRAY });
                 ui.selectable_value(&mut self.tab, i, label);
             }
             ui.selectable_value(&mut self.tab, PORTS, "⚙ Settings");
@@ -449,6 +460,13 @@ impl App {
         let mut start_wizard = false;
         let mut wiz_action: Option<usize> = None;
         let c = &mut self.cfg.controllers[port];
+        let presets = &self.controller_presets;
+        let suggested = dev.and_then(|d| crate::presets::suggested_preset(presets, d));
+        let family = dev
+            .map(|d| crate::presets::family_of(presets, d))
+            .unwrap_or_default();
+        let known_device = suggested.is_some();
+        let customizing = self.customizing[port];
 
         ui.horizontal(|ui| {
             ui.checkbox(&mut c.plugged, "Plugged in");
@@ -474,13 +492,20 @@ impl App {
                 ui.colored_label(WARN, "not connected");
             }
         });
-        // Switch-protocol pad seen through the OS/browser gamepad layer: offer raw HID instead.
+        // Switch-protocol pad seen through the OS/browser gamepad layer: switch to raw HID.
         let mut use_hid = false;
         if dev.is_some_and(|d| !d.is_hid && crate::presets::is_switch_n64(d)) {
             let hid_dev = snap
                 .devices
                 .iter()
                 .find(|d| d.is_hid && crate::presets::is_switch_n64(d));
+            // Desktop can switch immediately; the browser can only request a HID device from a
+            // user gesture (a click), so wasm still needs the button below. Only do this while
+            // still on the default Auto selection — once the device is assigned (by us or the
+            // user picking something in the dropdown), never fight that choice back every frame.
+            if !cfg!(target_arch = "wasm32") && hid_dev.is_some() && c.device == DeviceSel::Auto {
+                use_hid = true;
+            }
             egui::Frame::new()
                 .fill(Color32::from_rgb(70, 45, 10))
                 .inner_margin(8.0)
@@ -498,19 +523,21 @@ impl App {
                         "This is an 8BitDo 64 with its switch on S (or Nintendo's Switch Online N64 \
                          controller). Reading it as raw HID gives the most reliable mapping on every OS."
                     });
-                    ui.horizontal(|ui| {
-                        let label = if hid_dev.is_some() {
-                            "🔌 Use the HID device"
-                        } else if cfg!(target_arch = "wasm32") {
-                            "🔌 Connect via HID…"
-                        } else {
-                            "🔌 Use HID (waiting for device…)"
-                        };
-                        if ui.button(label).clicked() {
-                            use_hid = true;
-                        }
-                        ui.weak("…or move the switch to D.");
-                    });
+                    if cfg!(target_arch = "wasm32") {
+                        ui.horizontal(|ui| {
+                            let label = if hid_dev.is_some() {
+                                "🔌 Use the HID device"
+                            } else {
+                                "🔌 Connect via HID…"
+                            };
+                            if ui.button(label).clicked() {
+                                use_hid = true;
+                            }
+                            ui.weak("…or move the switch to D.");
+                        });
+                    } else if hid_dev.is_none() {
+                        ui.weak("Waiting for the HID device to appear…");
+                    }
                 });
         }
         if snap.devices.is_empty() && cfg!(target_arch = "wasm32") {
@@ -556,17 +583,100 @@ impl App {
                 });
             if c.pak.has_rumble() || c.alt_pak.has_rumble() {
                 match dev {
-                    Some(d) if d.ff => ui.weak("Host gamepad supports rumble ✔"),
-                    Some(_) => ui.colored_label(WARN, "This gamepad reports no rumble support"),
-                    None => ui.weak("No gamepad: rumble has nowhere to go"),
+                    Some(d) if d.ff => {
+                        ui.weak("Host gamepad supports rumble ✔");
+                        let held = ui.button("Test rumble (hold)").is_pointer_button_down_on();
+                        self.mgr.set_rumble(d.id, if held { 1.0 } else { 0.0 });
+                    }
+                    Some(_) => {
+                        ui.colored_label(WARN, "This gamepad reports no rumble support");
+                    }
+                    None => {
+                        ui.weak("No gamepad: rumble has nowhere to go");
+                    }
                 };
+                // D-mode here with no rumble, but this controller family has a known S-mode
+                // preset: that mode may support rumble even though this one doesn't. Silent
+                // otherwise — only speak up when something is actually missing.
+                if dev.is_some_and(|d| !d.is_hid && !d.ff)
+                    && family.iter().any(|p| p.mode == "S")
+                {
+                    ui.colored_label(
+                        ACCENT,
+                        "This controller's D mode doesn't support rumble here. Switching it to \
+                         S mode may — some controllers in this family can rumble there instead.",
+                    );
+                }
             }
             if c.pak == PakType::EmulatorMemory {
                 ui.weak("The emulator stores this Controller Pak itself (no rumble).");
             }
         });
 
-        section_if(ui, sub == 0, "Quick setup", |ui| {
+        let show_bindings = !known_device || customizing;
+        let mut customize_clicked = false;
+        let mut revert_clicked = false;
+        if sub == 0 && known_device {
+            if customizing {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(45, 45, 20))
+                    .inner_margin(8.0)
+                    .corner_radius(4.0)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label("Customizing this gamepad's bindings.");
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("↩ Revert to Known Device").clicked() {
+                                    revert_clicked = true;
+                                }
+                            });
+                        });
+                    });
+            } else {
+                let name = suggested.map_or("this controller", |p| p.name.as_str());
+                let hero_width = ui.available_width() * 0.5;
+                ui.vertical_centered(|ui| {
+                    ui.allocate_ui(egui::vec2(hero_width, 0.0), |ui| {
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(20, 50, 35))
+                            .inner_margin(18.0)
+                            .corner_radius(6.0)
+                            .show(ui, |ui| {
+                                ui.set_width(hero_width - 36.0);
+                                ui.vertical_centered(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "✨ Using Known Device: “{name}”"
+                                        ))
+                                        .strong()
+                                        .size(17.0),
+                                    );
+                                    ui.weak(
+                                        "Buttons, D-pad and C buttons are already set up for this gamepad.",
+                                    );
+                                    ui.add_space(10.0);
+                                    if ui.button("Customize").clicked() {
+                                        customize_clicked = true;
+                                    }
+                                });
+                            });
+                    });
+                });
+            }
+            ui.add_space(4.0);
+        }
+        if customize_clicked {
+            self.customizing[port] = true;
+        }
+        if revert_clicked {
+            self.customizing[port] = false;
+            if let Some(p) = suggested {
+                p.apply(c);
+            }
+        }
+
+        section_if(ui, sub == 0 && show_bindings, "Quick setup", |ui| {
             if let Some(i) = wiz {
                 let steps = wizard_steps(c);
                 ui.horizontal(|ui| {
@@ -599,11 +709,6 @@ impl App {
                 }
                 return;
             }
-            let presets = &self.controller_presets;
-            let suggested = dev.and_then(|d| crate::presets::suggested_preset(presets, d));
-            let family = dev
-                .map(|d| crate::presets::family_of(presets, d))
-                .unwrap_or_default();
             if let Some(cur) = suggested.filter(|_| !family.is_empty()) {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(format!("{} mode:", cur.family)).strong());
@@ -690,7 +795,7 @@ impl App {
             }
         });
 
-        section_if(ui, sub == 0, "Buttons", |ui| {
+        section_if(ui, sub == 0 && show_bindings, "Buttons", |ui| {
             egui::Grid::new("buttons")
                 .num_columns(2)
                 .striped(true)
@@ -716,7 +821,7 @@ impl App {
         });
 
         for g in [Group::DPad, Group::C, Group::Stick] {
-            section_if(ui, sub == 0, g.label(), |ui| {
+            section_if(ui, sub == 0 && show_bindings, g.label(), |ui| {
                 if let Some(t) = group_editor(ui, g, c, snap, dev, cap) {
                     want_capture = Some(t);
                 }
@@ -1850,7 +1955,7 @@ pub fn run_native() {
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("TDug N64 Input — Configuration")
-            .with_inner_size([1240.0, 820.0])
+            .with_inner_size([1240.0, 760.0])
             .with_min_inner_size([960.0, 600.0]),
         ..Default::default()
     };

@@ -11,3 +11,6 @@ publish = false
 
 [dependencies]
 gilrs = "0.11"
+
+[patch.crates-io]
+gilrs-core = { path = "../../vendor/gilrs-core" }
