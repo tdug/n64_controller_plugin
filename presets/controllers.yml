@@ -16,6 +16,8 @@
 #   platforms:  optional filter: any of web, windows, macos, linux. Raw codes differ per
 #               platform, so presets using raw_* inputs should set this.
 #   deadzone:   optional stick deadzone (0..1)
+#   modes:      optional mechanism per group, e.g. {stick: DualAxis, dpad: FourButtons, c: AxisXButtonsY}
+#               (DualAxis | AxisXButtonsY | ButtonsXAxisY | FourButtons); inferred from bindings if absent
 #   buttons:    N64 button → list of inputs (A B Z Start L R DUp DDown DLeft DRight CUp CDown CLeft CRight)
 #   stick:      up/down/left/right → list of inputs
 #
@@ -81,7 +83,8 @@ presets:
     names: [["8bitdo", "64"]]
     ids: ["2dc8:3019"]
     platforms: [web]
-    deadzone: 0.05
+    deadzone: 0.02
+    modes: {stick: DualAxis, dpad: FourButtons, c: AxisXButtonsY}
     buttons:
       A:      [{type: button, button: South}]
       B:      [{type: button, button: East}]

@@ -96,6 +96,9 @@ pub struct ControllerPreset {
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadzone: Option<f32>,
+    /// Mechanism per direction group; inferred from the bindings when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modes: Option<crate::config::GroupModes>,
     pub buttons: BTreeMap<N64Button, Vec<Input>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stick: Option<StickBindings>,
@@ -203,6 +206,9 @@ impl ControllerPreset {
             c.stick.deadzone = dz;
         }
         c.infer_group_modes();
+        if let Some(m) = &self.modes {
+            c.group_modes = m.clone();
+        }
     }
 
     /// Build a preset from a controller's current gamepad bindings (for "Export").
@@ -244,6 +250,7 @@ impl ControllerPreset {
                 vec![]
             },
             deadzone: Some(c.stick.deadzone),
+            modes: Some(c.group_modes.clone()),
             buttons,
             stick: Some(StickBindings {
                 up: pad(&sb.up),
@@ -875,6 +882,12 @@ mod tests {
         assert_eq!(p.name, "8BitDo 64 — D mode (browser)");
         let mut c = ControllerConfig::defaults(0, false);
         p.apply(&mut c);
+        // Saved user profile: C buttons as X axis + Up/Down, 2% deadzone.
+        assert_eq!(
+            c.group_modes.get(crate::config::Group::C),
+            crate::config::GroupMode::AxisXButtonsY
+        );
+        assert_eq!(c.stick.deadzone, 0.02);
         // Resting state as the browser reports it: hat axis 9 (code 58) at 3.286, axis 5 at 0.
         d.raw_axes = vec![(54, -0.004), (58, 3.2857)];
         d.axes[PadAxis::RightStickY as usize] = -1.0; // browser axis 3 rests at -1
