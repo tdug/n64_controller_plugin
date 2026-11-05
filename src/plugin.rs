@@ -265,20 +265,17 @@ pub extern "C" fn GetDllInfo(info: *mut PluginInfo) {
     info.memory_bswaped = 1;
 }
 
-/// Zilmar 1.1: `ControlInfo*`. Mupen64Plus: `CONTROL_INFO` by value (= a `CONTROL*`).
+/// Zilmar 1.1 passes `CONTROL_INFO` by value, not as a pointer. Mupen64Plus's `CONTROL_INFO`
+/// is itself just a single `CONTROL*` field, so reading `info.hwnd` (the struct's first field,
+/// landing in the same argument slot) recovers the value it actually passed.
 #[unsafe(no_mangle)]
-pub extern "C" fn InitiateControllers(arg: *mut c_void) {
+pub extern "C" fn InitiateControllers(info: ControlInfo) {
     guard(|| {
-        if arg.is_null() {
-            return;
-        }
         let sh = shared();
         let (ptr, stride) = if M64P.load(Ordering::Relaxed) {
             let v = CORE_VERSION.load(Ordering::Relaxed);
-            (arg as usize, if v >= 0x020600 { 4 } else { 3 })
+            (info.hwnd as usize, if v >= 0x020600 { 4 } else { 3 })
         } else {
-            // SAFETY: Zilmar 1.1 passes a valid CONTROL_INFO pointer.
-            let info = unsafe { &*(arg as *const ControlInfo) };
             if !info.header.is_null() {
                 // SAFETY: header points at the first 0x40 bytes of the ROM.
                 let h = unsafe { std::slice::from_raw_parts(info.header, 0x40) };
