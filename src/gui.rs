@@ -399,7 +399,10 @@ impl App {
             ui.separator();
             for i in 0..PORTS {
                 let plugged = self.cfg.controllers[i].plugged;
-                let label = format!("{} Controller {}", if plugged { "●" } else { "○" }, i + 1);
+                // Color, not a glyph, marks plugged/unplugged: circle glyphs (●/○) render
+                // inconsistently depending on what the OS/bundled fonts happen to cover.
+                let label = egui::RichText::new(format!("Controller {}", i + 1))
+                    .color(if plugged { LIVE } else { Color32::GRAY });
                 ui.selectable_value(&mut self.tab, i, label);
             }
             ui.selectable_value(&mut self.tab, PORTS, "⚙ Settings");
@@ -610,7 +613,70 @@ impl App {
             }
         });
 
-        section_if(ui, sub == 0, "Quick setup", |ui| {
+        let show_bindings = !known_device || customizing;
+        let mut customize_clicked = false;
+        let mut revert_clicked = false;
+        if sub == 0 && known_device {
+            if customizing {
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(45, 45, 20))
+                    .inner_margin(8.0)
+                    .corner_radius(4.0)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label("Customizing this gamepad's bindings.");
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.button("↩ Revert to Known Device").clicked() {
+                                    revert_clicked = true;
+                                }
+                            });
+                        });
+                    });
+            } else {
+                let name = suggested.map_or("this controller", |p| p.name.as_str());
+                let hero_width = ui.available_width() * 0.5;
+                ui.vertical_centered(|ui| {
+                    ui.allocate_ui(egui::vec2(hero_width, 0.0), |ui| {
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(20, 50, 35))
+                            .inner_margin(18.0)
+                            .corner_radius(6.0)
+                            .show(ui, |ui| {
+                                ui.set_width(hero_width - 36.0);
+                                ui.vertical_centered(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "✨ Using Known Device: “{name}”"
+                                        ))
+                                        .strong()
+                                        .size(17.0),
+                                    );
+                                    ui.weak(
+                                        "Buttons, D-pad and C buttons are already set up for this gamepad.",
+                                    );
+                                    ui.add_space(10.0);
+                                    if ui.button("Customize").clicked() {
+                                        customize_clicked = true;
+                                    }
+                                });
+                            });
+                    });
+                });
+            }
+            ui.add_space(4.0);
+        }
+        if customize_clicked {
+            self.customizing[port] = true;
+        }
+        if revert_clicked {
+            self.customizing[port] = false;
+            if let Some(p) = suggested {
+                p.apply(c);
+            }
+        }
+
+        section_if(ui, sub == 0 && show_bindings, "Quick setup", |ui| {
             if let Some(i) = wiz {
                 let steps = wizard_steps(c);
                 ui.horizontal(|ui| {
@@ -729,39 +795,7 @@ impl App {
             }
         });
 
-        let mut customize_clicked = false;
-        section_if(ui, sub == 0 && known_device && !customizing, "Using Known Device", |ui| {
-            let name = suggested.map_or("this controller", |p| p.name.as_str());
-            ui.label(format!(
-                "“{name}” already covers the buttons, D-pad and C buttons for this gamepad."
-            ));
-            if ui.button("Customize").clicked() {
-                customize_clicked = true;
-            }
-            ui.separator();
-            ui.horizontal_wrapped(|ui| {
-                for b in N64Button::ALL {
-                    let active = c.buttons.get(&b).is_some_and(|l| snap.any_pressed(l, dev));
-                    ui.colored_label(
-                        if active { LIVE } else { Color32::GRAY },
-                        b.label(),
-                    );
-                }
-                for d in Dir::ALL {
-                    let active = snap.any_pressed(c.stick_bindings.get_mut(d), dev);
-                    ui.colored_label(
-                        if active { LIVE } else { Color32::GRAY },
-                        format!("{d:?}"),
-                    );
-                }
-            });
-        });
-        if customize_clicked {
-            self.customizing[port] = true;
-        }
-
-        let show_bindings = sub == 0 && (!known_device || customizing);
-        section_if(ui, show_bindings, "Buttons", |ui| {
+        section_if(ui, sub == 0 && show_bindings, "Buttons", |ui| {
             egui::Grid::new("buttons")
                 .num_columns(2)
                 .striped(true)
@@ -787,7 +821,7 @@ impl App {
         });
 
         for g in [Group::DPad, Group::C, Group::Stick] {
-            section_if(ui, show_bindings, g.label(), |ui| {
+            section_if(ui, sub == 0 && show_bindings, g.label(), |ui| {
                 if let Some(t) = group_editor(ui, g, c, snap, dev, cap) {
                     want_capture = Some(t);
                 }
@@ -1921,7 +1955,7 @@ pub fn run_native() {
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("TDug N64 Input — Configuration")
-            .with_inner_size([1240.0, 820.0])
+            .with_inner_size([1240.0, 760.0])
             .with_min_inner_size([960.0, 600.0]),
         ..Default::default()
     };
